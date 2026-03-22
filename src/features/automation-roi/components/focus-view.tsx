@@ -302,7 +302,7 @@ export function FocusView({
         period, it will stop being worth it if optimizing it takes longer than:
       </motion.p>
 
-      <motion.div variants={revealItemVariants} className="space-y-1 flex flex-col items-center gap-4">
+      <motion.div variants={revealItemVariants} className="space-y-1 flex flex-col items-center gap-6">
         <div className="text-5xl font-bold tabular-nums h-12 flex items-center">
           {impossible ? (
             <span className="inline-flex items-baseline gap-2">
