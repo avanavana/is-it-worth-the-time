@@ -299,7 +299,7 @@ export function FocusView({
             },
           }))}
         />{' '}
-        period, it will stop being worth it if it takes longer than:
+        period, it will stop being worth it if optimizing it takes longer than:
       </motion.p>
 
       <motion.div variants={revealItemVariants} className="space-y-1 flex flex-col items-center gap-2">
