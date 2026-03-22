@@ -123,46 +123,34 @@ export function AutomationROIPage() {
 
   return (
     <main className="mx-auto w-full min-h-screen max-w-[1300px] flex flex-col">
-      <div className={cn("pointer-events-none fixed inset-x-0 top-0 z-50",
-              showTable
-                ? 'bg-background/50 backdrop-blur-md md:bg-transparent md:backdrop-blur-none'
-                : 'bg-transparent')}>
-        <div className="mx-auto w-full max-w-[1300px] p-8">
-          <div
-            className={cn(
-              'flex items-center justify-between rounded-xl'
-            )}
+      {showTable ? (
+        <div className="fixed top-8 left-8 z-30">
+          <Button
+            variant="outline"
+            size="lg"
+            onClick={() => setShowTable(false)}
+            className="bg-background/85 backdrop-blur-md md:bg-transparent md:backdrop-blur-none"
           >
-            {showTable ? (
-              <Button
-                variant="outline"
-                size="lg"
-                onClick={() => setShowTable(false)}
-                className="pointer-events-auto"
-              >
-                <ArrowLeft className="size-5" />
-                Close table
-              </Button>
-            ) : (
-              <div />
-            )}
-            <div className="pointer-events-auto">
-              <SettingsMenu
-                calendarBasis={calendarBasis}
-                customDaysPerYear={customDaysPerYear}
-                displayMode={displayMode}
-                significantDigits={significantDigits}
-                onCalendarBasisChange={setCalendarBasis}
-                onCustomDaysPerYearChange={setCustomDaysPerYear}
-                onDisplayModeChange={setDisplayMode}
-                onSignificantDigitsChange={setSignificantDigits}
-                onReset={resetDefaults}
-                showReset={hasResettableChanges}
-                trigger={menuTrigger}
-              />
-            </div>
-          </div>
+            <ArrowLeft className="size-5" />
+            Close table
+          </Button>
         </div>
+      ) : null}
+
+      <div className="fixed top-8 right-8 z-50">
+        <SettingsMenu
+          calendarBasis={calendarBasis}
+          customDaysPerYear={customDaysPerYear}
+          displayMode={displayMode}
+          significantDigits={significantDigits}
+          onCalendarBasisChange={setCalendarBasis}
+          onCustomDaysPerYearChange={setCustomDaysPerYear}
+          onDisplayModeChange={setDisplayMode}
+          onSignificantDigitsChange={setSignificantDigits}
+          onReset={resetDefaults}
+          showReset={hasResettableChanges}
+          trigger={menuTrigger}
+        />
       </div>
 
       <div
