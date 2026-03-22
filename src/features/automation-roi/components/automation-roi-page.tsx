@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Check, Menu } from 'lucide-react'
+import { motion } from 'motion/react'
 import { toast } from 'sonner'
 
 import { PageFooter } from '@/components/layout/page-footer'
@@ -18,6 +19,27 @@ import { ROITableSection } from './table/roi-table-section'
 
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+
+const revealContainerVariants = {
+  hidden: {},
+  show: {
+    transition: {
+      staggerChildren: 0.1,
+      delayChildren: 0.04,
+    },
+  },
+}
+const revealItemVariants = {
+  hidden: { opacity: 0, y: 14, filter: 'blur(2px)' },
+  show: {
+    opacity: 1,
+    y: 0,
+    filter: 'blur(0px)',
+    transition: {
+      duration: 0.42,
+    },
+  },
+}
 
 export function AutomationROIPage() {
   const {
@@ -100,37 +122,31 @@ export function AutomationROIPage() {
   ])
 
   return (
-    <main className="mx-auto w-full min-h-screen max-w-[1300px] flex flex-col p-8">
-      <div
-        className={cn('relative grow', {
-          'flex flex-col items-center justify-center': !showTable,
-        })}
-      >
-        {!showTable ? (
-          <div className="absolute top-0 right-0">
-            <SettingsMenu
-              calendarBasis={calendarBasis}
-              customDaysPerYear={customDaysPerYear}
-              displayMode={displayMode}
-              significantDigits={significantDigits}
-              onCalendarBasisChange={setCalendarBasis}
-              onCustomDaysPerYearChange={setCustomDaysPerYear}
-              onDisplayModeChange={setDisplayMode}
-              onSignificantDigitsChange={setSignificantDigits}
-              onReset={resetDefaults}
-              showReset={hasResettableChanges}
-              trigger={menuTrigger}
-            />
-          </div>
-        ) : null}
-
-        {showTable ? (
-          <section className="space-y-12">
-            <div className="mx-auto flex w-full max-w-[980px] items-center justify-between">
-              <Button variant="outline" size="lg" onClick={() => setShowTable(false)}>
+    <main className="mx-auto w-full min-h-screen max-w-[1300px] flex flex-col">
+      <div className={cn("pointer-events-none fixed inset-x-0 top-0 z-50",
+              showTable
+                ? 'bg-background/50 backdrop-blur-md md:bg-transparent md:backdrop-blur-none'
+                : 'bg-transparent')}>
+        <div className="mx-auto w-full max-w-[1300px] p-8">
+          <div
+            className={cn(
+              'flex items-center justify-between rounded-xl'
+            )}
+          >
+            {showTable ? (
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => setShowTable(false)}
+                className="pointer-events-auto"
+              >
                 <ArrowLeft className="size-5" />
                 Close table
               </Button>
+            ) : (
+              <div />
+            )}
+            <div className="pointer-events-auto">
               <SettingsMenu
                 calendarBasis={calendarBasis}
                 customDaysPerYear={customDaysPerYear}
@@ -145,16 +161,31 @@ export function AutomationROIPage() {
                 trigger={menuTrigger}
               />
             </div>
+          </div>
+        </div>
+      </div>
 
-            <div className="space-y-12 text-center max-w-4xl mx-auto">
+      <div
+        className={cn('relative grow p-8 pt-28', {
+          'flex flex-col items-center justify-center': !showTable,
+        })}
+      >
+        {showTable ? (
+          <motion.section
+            className="space-y-12"
+            variants={revealContainerVariants}
+            initial="hidden"
+            animate="show"
+          >
+            <motion.div variants={revealItemVariants} className="space-y-12 text-center max-w-4xl mx-auto">
               <h1 className="text-5xl font-bold tracking-tight">Is It Worth the Time?</h1>
               <p className="text-3xl font-medium leading-snug text-muted-foreground">
                 How much time can you afford to spend on optimizing or automating a repeated task over a{' '}
-                  <InlinePeriodPicker value={lifetimeYears} onChange={setLifetimeYears} /> period?
+                <InlinePeriodPicker value={lifetimeYears} onChange={setLifetimeYears} /> period?{!isDefaultCalendarBasis ? '*' : ''}
               </p>
-            </div>
+            </motion.div>
 
-            <div className="mx-auto flex w-full max-w-md items-center gap-3">
+            <motion.div variants={revealItemVariants} className="mx-auto flex w-full max-w-md items-center gap-3">
               <div className="relative flex-1">
                 <div
                   className={cn(
@@ -188,9 +219,10 @@ export function AutomationROIPage() {
                   }}
                 />
               </div>
-            </div>
+            </motion.div>
 
-            <ROITableSection
+            <motion.div className="-mx-8" variants={revealItemVariants}>
+              <ROITableSection
               rows={rows}
               columns={columns}
               lifetimeYears={lifetimeYears}
@@ -205,10 +237,11 @@ export function AutomationROIPage() {
               onUpdateColumn={updateCustomColumn}
               onDeleteColumn={deleteCustomColumn}
             />
+            </motion.div>
             {!isDefaultCalendarBasis ? (
-              <p className="-mt-12 mb-12 text-center text-sm text-muted-foreground">{`* based on a calendar year of ${daysPerYear} days`}</p>
+              <motion.p variants={revealItemVariants} className="-mt-12 mb-12 text-center text-sm text-muted-foreground">{`* based on a calendar year of ${daysPerYear} days`}</motion.p>
             ) : null}
-          </section>
+          </motion.section>
         ) : (
           <FocusView
             frequency={focusFrequency}

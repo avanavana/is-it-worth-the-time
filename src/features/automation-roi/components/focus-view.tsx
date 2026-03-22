@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import NumberFlow from '@number-flow/react'
 import { AudioWaveform, Calendar, Check, Hourglass, ArrowRight } from 'lucide-react'
+import { motion } from 'motion/react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -22,6 +23,27 @@ interface FocusViewProps {
   calendarBasis: CalendarBasis
   customDaysPerYear: number
   onShowTable: () => void
+}
+
+const revealContainerVariants = {
+  hidden: {},
+  show: {
+    transition: {
+      staggerChildren: 0.1,
+      delayChildren: 0.04,
+    },
+  },
+}
+const revealItemVariants = {
+  hidden: { opacity: 0, y: 14, filter: 'blur(2px)' },
+  show: {
+    opacity: 1,
+    y: 0,
+    filter: 'blur(0px)',
+    transition: {
+      duration: 0.42,
+    },
+  },
 }
 
 export function FocusView({
@@ -91,7 +113,6 @@ export function FocusView({
       : LIFETIME_PRESETS_YEARS.filter((years) =>
           formatLifetimePhrase(years).toLowerCase().includes(lifetimeText.toLowerCase()),
         )
-
   function openToken(field: 'frequency' | 'time' | 'lifetime') {
     if (openField === field) {
       return
@@ -191,10 +212,20 @@ export function FocusView({
   }
 
   return (
-    <section className="mx-auto flex max-w-5xl flex-col items-center gap-12 text-center">
-      <h1 className="text-5xl font-bold tracking-tight">Is It Worth the Time?</h1>
+    <motion.section
+      className="mx-auto flex max-w-5xl flex-col items-center gap-12 text-center"
+      variants={revealContainerVariants}
+      initial="hidden"
+      animate="show"
+    >
+      <motion.h1 variants={revealItemVariants} className="text-5xl font-bold tracking-tight">
+        Is It Worth the Time?
+      </motion.h1>
 
-      <p className="max-w-5xl text-3xl leading-snug font-regular text-muted-foreground md:px-20">
+      <motion.p
+        variants={revealItemVariants}
+        className="max-w-5xl text-3xl leading-snug font-regular text-muted-foreground md:px-20"
+      >
         If, by optimizing a task that I do{' '}
         <EditableToken
           icon={<AudioWaveform className="size-[0.95em] translate-y-[0.03em]" strokeWidth={2.25} />}
@@ -218,7 +249,8 @@ export function FocusView({
               setOpenField(null)
             },
           }))}
-        />{', '}
+        />
+        {', '}
         I can shave off{' '}
         <EditableToken
           icon={<Hourglass className="size-[0.95em] translate-y-[0.03em]" strokeWidth={2.25} />}
@@ -267,11 +299,10 @@ export function FocusView({
             },
           }))}
         />{' '}
-        period,{' '}
-        it will stop being worth it if it takes longer than:
-      </p>
+        period, it will stop being worth it if it takes longer than:
+      </motion.p>
 
-      <div className="space-y-1 flex flex-col items-center gap-2">
+      <motion.div variants={revealItemVariants} className="space-y-1 flex flex-col items-center gap-2">
         <div className="text-5xl font-bold tabular-nums">
           {impossible ? (
             <span className="inline-flex items-baseline gap-2">
@@ -294,8 +325,8 @@ export function FocusView({
         Show full table
         <ArrowRight className="size-5" />
       </Button>
-      </div>
-    </section>
+      </motion.div>
+    </motion.section>
   )
 }
 

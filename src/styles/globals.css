@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
 
 @theme {
   --color-background: #ffffff;
@@ -9,6 +10,8 @@
   --color-muted-foreground: #71717a;
   --color-primary: #0f172a;
   --color-ring: #a1a1aa;
+
+  --text-2xs: 0.625rem;
 }
 
 :root {

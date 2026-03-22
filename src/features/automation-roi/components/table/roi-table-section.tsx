@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import NumberFlow from '@number-flow/react'
 import { Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
@@ -45,9 +46,9 @@ type EditorState =
   | { kind: 'edit-column'; id: string; value: string }
   | null
 
-const CELL_WIDTH = 112
-const ROW_HEIGHT = 66
-const HEADER_HEIGHT = 42
+const CELL_WIDTH = 96
+const ROW_HEIGHT = 48
+const HEADER_HEIGHT = 48
 const HEADER_GAP = 8
 const ROW_LABEL_WIDTH = 54
 const Y_LABEL_WIDTH = 48
@@ -56,6 +57,9 @@ const ROW_FOOTER_SPACE = THIN_SIZE + 22
 const COLUMN_HOVER_ZONE_WIDTH = 64
 const ADD_BAR_OUTER_OFFSET = 2
 const ADD_BAR_INNER_OFFSET = 2
+const LEFT_GUTTER = ROW_LABEL_WIDTH + Y_LABEL_WIDTH + 8
+const RIGHT_GUTTER = COLUMN_HOVER_ZONE_WIDTH + ADD_BAR_OUTER_OFFSET + 2
+const MOBILE_FIXED_Y_STRIP = Y_LABEL_WIDTH + 8
 
 export function ROITableSection({
   rows,
@@ -77,6 +81,9 @@ export function ROITableSection({
   const [hoverRightZone, setHoverRightZone] = useState(false)
   const [hoverBottomZone, setHoverBottomZone] = useState(false)
   const [cellTooltip, setCellTooltip] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [isMobileViewport, setIsMobileViewport] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false,
+  )
   const newColumnInputRef = useRef<HTMLInputElement | null>(null)
   const newRowInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -96,9 +103,12 @@ export function ROITableSection({
     ? [...rows, ({ id: '__draft-row__', label: '', seconds: 0, isCustom: true } as const)]
     : rows
 
+  const activeLeftGutter = isMobileViewport ? ROW_LABEL_WIDTH : LEFT_GUTTER
+  const activeRightGutter = isMobileViewport ? 0 : RIGHT_GUTTER
   const matrixWidth = visibleColumns.length * CELL_WIDTH
   const matrixHeight = visibleRows.length * ROW_HEIGHT
   const matrixTop = HEADER_HEIGHT + HEADER_GAP
+  const totalVisualWidth = activeLeftGutter + matrixWidth + activeRightGutter
   const editorKind = editor?.kind ?? null
 
   useEffect(() => {
@@ -120,6 +130,19 @@ export function ROITableSection({
       return () => window.clearTimeout(timer)
     }
   }, [editorKind])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const media = window.matchMedia('(max-width: 767px)')
+    const update = () => setIsMobileViewport(media.matches)
+
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
 
   function commitEditor() {
     if (!editor) {
@@ -185,13 +208,50 @@ export function ROITableSection({
 
   return (
     <div>
-      <div className="mx-auto w-fit mb-12">
-        <div className="relative mb-2" style={{ width: matrixWidth }}>
+      <div className="mb-2 w-full md:hidden">
+        <div className="relative">
+          <p className="text-center text-sm font-medium text-muted-foreground">How often do you do it?</p>
+          {headerAction ? <div className="absolute top-0 right-0">{headerAction}</div> : null}
+        </div>
+      </div>
+
+      <div className="relative mb-12 w-full">
+        {isMobileViewport ? (
+          <>
+            <div
+              className="pointer-events-none absolute left-0 z-20 bg-background"
+              style={{
+                top: 0,
+                width: MOBILE_FIXED_Y_STRIP,
+                height: matrixTop + matrixHeight,
+              }}
+            />
+            <div
+              className="pointer-events-none absolute left-0 z-30 flex items-center justify-center bg-background"
+              style={{
+                top: matrixTop,
+                width: MOBILE_FIXED_Y_STRIP,
+                height: matrixHeight,
+              }}
+            >
+              <p className="-rotate-90 whitespace-nowrap text-sm text-muted-foreground">
+                How much time will you save every time?
+              </p>
+            </div>
+          </>
+        ) : null}
+
+        <div
+          className="w-full overflow-x-auto overflow-y-clip md:overflow-visible pr-8 md:pr-0"
+          {...(isMobileViewport && { style: {paddingLeft: MOBILE_FIXED_Y_STRIP }})}
+        >
+        <div className="mx-auto" style={{ width: totalVisualWidth }}>
+        <div className="relative mb-2 hidden md:block" style={{ width: matrixWidth, marginLeft: activeLeftGutter }}>
           <p className="text-center text-sm font-medium text-muted-foreground">How often do you do it?</p>
           {headerAction ? <div className="absolute top-0 right-0">{headerAction}</div> : null}
         </div>
 
-        <div className="relative pb-[48px]" style={{ width: matrixWidth }}>
+        <div className="relative pb-[48px]" style={{ width: matrixWidth, marginLeft: activeLeftGutter }}>
           <div
             className="grid"
             style={{
@@ -203,18 +263,20 @@ export function ROITableSection({
               if (column.id === '__draft-column__') {
                 return (
                   <div key={column.id} className="px-1">
-                    <Input
-                      ref={newColumnInputRef}
-                      value={editor?.kind === 'new-column' ? editor.value : ''}
-                      className="h-8 text-center"
-                      placeholder="3/day"
-                      onChange={(event) => setEditor({ kind: 'new-column', value: event.target.value })}
-                      onBlur={commitEditor}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') commitEditor()
-                        if (event.key === 'Escape') cancelEditor()
-                      }}
-                    />
+                    <div className="group relative mx-auto mt-1 h-8 after:content-[''] after:absolute after:bottom-0 after:left-0 after:w-full after:h-0.5 after:bg-foreground after:origin-right after:transition-transform after:duration-300 after:scale-x-0 hover:after:origin-left hover:after:scale-x-100 focus-within:after:origin-left focus-within:after:scale-x-100">
+                      <Input
+                        ref={newColumnInputRef}
+                        value={editor?.kind === 'new-column' ? editor.value : ''}
+                        className="h-full rounded-none border-0 bg-transparent px-0 text-center text-sm font-bold text-foreground shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/20"
+                        placeholder="3/day"
+                        onChange={(event) => setEditor({ kind: 'new-column', value: event.target.value })}
+                        onBlur={commitEditor}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') commitEditor()
+                          if (event.key === 'Escape') cancelEditor()
+                        }}
+                      />
+                    </div>
                   </div>
                 )
               }
@@ -306,7 +368,7 @@ export function ROITableSection({
 
                   if (row.id === '__draft-row__' || column.id === '__draft-column__') {
                     return (
-                      <div key={`${row.id}-${column.id}`} className={cn('bg-muted/20', borderClass)} />
+                      <div key={`${row.id}-${column.id}`} className={cn('bg-muted/30', borderClass)} />
                     )
                   }
 
@@ -318,7 +380,7 @@ export function ROITableSection({
                       <div
                         key={`${row.id}-${column.id}`}
                         className={cn(
-                          'flex items-center justify-center bg-muted/30 text-muted',
+                          'flex items-center justify-center bg-muted text-muted-foreground/30 dark:bg-muted/30 dark:text-muted',
                           borderClass,
                         )}
                       >
@@ -337,7 +399,7 @@ export function ROITableSection({
                       <div key={`${row.id}-${column.id}`} className={borderClass}>
                         <button
                           type="button"
-                          className="flex h-full w-full items-center justify-center bg-background text-sm transition-colors hover:bg-muted/40"
+                          className="flex h-full w-full items-center justify-center bg-background text-sm transition-colors hover:bg-muted dark:hover:bg-muted/30"
                           aria-label={tableValue.ariaLabel}
                         >
                           <span className="inline-flex items-center gap-1 tabular-nums">
@@ -368,7 +430,7 @@ export function ROITableSection({
                     <div key={`${row.id}-${column.id}`} className={borderClass}>
                       <button
                         type="button"
-                        className="flex h-full w-full items-center justify-center bg-background text-sm transition-colors hover:bg-muted/40"
+                        className="flex h-full w-full items-center justify-center bg-background text-sm transition-colors hover:bg-muted dark:hover:bg-muted/30"
                         aria-label={`${compact.approx ? 'approximately ' : ''}${compact.value} ${compact.unit}`}
                         onMouseEnter={
                           shouldShowTooltip
@@ -420,18 +482,20 @@ export function ROITableSection({
                   style={{ height: ROW_HEIGHT }}
                 >
                   {isDraftRow ? (
-                    <Input
-                      ref={newRowInputRef}
-                      value={editor?.kind === 'new-row' ? editor.value : ''}
-                      className="h-8"
-                      placeholder="45 sec"
-                      onChange={(event) => setEditor({ kind: 'new-row', value: event.target.value })}
-                      onBlur={commitEditor}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') commitEditor()
-                        if (event.key === 'Escape') cancelEditor()
-                      }}
-                    />
+                    <div className="group relative h-8 w-full after:content-[''] after:absolute after:bottom-0 after:left-0 after:w-full after:h-0.5 after:bg-foreground after:origin-right after:transition-transform after:duration-300 after:scale-x-0 hover:after:origin-left hover:after:scale-x-100 focus-within:after:origin-left focus-within:after:scale-x-100">
+                      <Input
+                        ref={newRowInputRef}
+                        value={editor?.kind === 'new-row' ? editor.value : ''}
+                        className="h-full rounded-none border-0 bg-transparent px-0 text-right text-sm font-bold text-foreground shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/20"
+                        placeholder="45 min"
+                        onChange={(event) => setEditor({ kind: 'new-row', value: event.target.value })}
+                        onBlur={commitEditor}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') commitEditor()
+                          if (event.key === 'Escape') cancelEditor()
+                        }}
+                      />
+                    </div>
                   ) : isEditingRow ? (
                     <Input
                       autoFocus
@@ -483,27 +547,29 @@ export function ROITableSection({
             })}
           </div>
 
-          <div
-            className="absolute flex items-center justify-center"
-            style={{
-              left: -(ROW_LABEL_WIDTH + Y_LABEL_WIDTH + 8),
-              top: matrixTop,
-              width: Y_LABEL_WIDTH,
-              height: matrixHeight,
-            }}
-          >
-            <p className="-rotate-90 whitespace-nowrap text-sm text-muted-foreground">
-              How much time will you save every time?
-            </p>
-          </div>
+          {!isMobileViewport ? (
+            <div
+              className="absolute flex items-center justify-center"
+              style={{
+                left: -(ROW_LABEL_WIDTH + Y_LABEL_WIDTH + 8),
+                top: matrixTop,
+                width: Y_LABEL_WIDTH,
+                height: matrixHeight,
+              }}
+            >
+              <p className="-rotate-90 whitespace-nowrap text-sm text-muted-foreground">
+                How much time will you save every time?
+              </p>
+            </div>
+          ) : null}
 
           {!editor && canAddColumn ? (
             <div
               className="absolute z-10"
               style={{
-                left: matrixWidth + ADD_BAR_OUTER_OFFSET,
+                left: isMobileViewport ? matrixWidth - THIN_SIZE : matrixWidth + ADD_BAR_OUTER_OFFSET,
                 top: matrixTop,
-                width: COLUMN_HOVER_ZONE_WIDTH,
+                width: isMobileViewport ? THIN_SIZE : COLUMN_HOVER_ZONE_WIDTH,
                 height: matrixHeight,
               }}
               onMouseEnter={() => setHoverRightZone(true)}
@@ -516,11 +582,11 @@ export function ROITableSection({
                     type="button"
                     aria-label="Add column"
                     className={cn(
-                      'absolute z-20 flex items-center justify-center rounded-md bg-muted/45 text-muted-foreground transition-all hover:bg-muted/65 hover:text-foreground',
+                      'absolute z-20 flex items-center justify-center rounded-md bg-muted text-muted-foreground transition-all hover:bg-muted/75 hover:text-foreground',
                       showThinColumn ? 'opacity-100' : 'pointer-events-none opacity-0',
                     )}
                     style={{
-                      left: ADD_BAR_INNER_OFFSET,
+                      left: isMobileViewport ? 0 : ADD_BAR_INNER_OFFSET,
                       top: 0,
                       width: THIN_SIZE,
                       height: matrixHeight,
@@ -560,7 +626,7 @@ export function ROITableSection({
                     type="button"
                     aria-label="Add row"
                     className={cn(
-                      'absolute z-20 flex items-center justify-center rounded-md bg-muted/45 text-muted-foreground transition-all hover:bg-muted/65 hover:text-foreground',
+                      'absolute z-20 flex items-center justify-center rounded-md bg-muted text-muted-foreground transition-all hover:bg-muted/75 hover:text-foreground',
                       showThinRow ? 'opacity-100' : 'pointer-events-none opacity-0',
                     )}
                     style={{
@@ -585,14 +651,19 @@ export function ROITableSection({
             </div>
           ) : null}
 
-          {cellTooltip && displayMode !== 'exact' ? (
-            <div
-              className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full rounded-md bg-foreground px-3 py-1.5 text-xs text-background shadow-md"
-              style={{ left: cellTooltip.x, top: cellTooltip.y }}
-            >
-              {cellTooltip.text}
-            </div>
-          ) : null}
+          {cellTooltip && displayMode !== 'exact' && typeof document !== 'undefined'
+            ? createPortal(
+                <div
+                  className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full rounded-md bg-foreground px-3 py-1.5 text-xs text-background shadow-md"
+                  style={{ left: cellTooltip.x, top: cellTooltip.y }}
+                >
+                  {cellTooltip.text}
+                </div>,
+                document.body,
+              )
+            : null}
+        </div>
+        </div>
         </div>
       </div>
     </div>
