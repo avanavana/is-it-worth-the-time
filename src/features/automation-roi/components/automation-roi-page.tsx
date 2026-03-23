@@ -122,7 +122,7 @@ export function AutomationROIPage() {
   ])
 
   return (
-    <main className="mx-auto w-full min-h-screen max-w-[1300px] flex flex-col">
+    <main className="mx-auto w-full min-h-screen flex flex-col">
       {showTable ? (
         <div className="fixed top-8 left-8 z-30">
           <Button
