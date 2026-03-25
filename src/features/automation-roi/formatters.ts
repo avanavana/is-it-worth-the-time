@@ -127,6 +127,38 @@ export function formatPreciseTooltipText(seconds: number): string {
   return `${trim(primaryValue)} ${shortUnitLabel(selected.key, primaryValue)}, ${trim(secondaryValue)} ${shortUnitLabel(secondary.key, secondaryValue)}`
 }
 
+export function formatPreciseLongText(seconds: number): string {
+  if (seconds < SECONDS_IN_MINUTE) {
+    const rounded = Math.round(seconds)
+    return `${rounded} ${longUnitLabel('s', rounded)}`
+  }
+
+  const selected = pickUnit(seconds)
+  const primaryValue = Math.floor(seconds / selected.seconds)
+  const remainder = seconds - primaryValue * selected.seconds
+
+  if (remainder <= 0 || primaryValue <= 0) {
+    const fallback = seconds / selected.seconds
+    return `${trim(fallback)} ${longUnitLabel(selected.key, fallback)}`
+  }
+
+  const secondary = nextSmallerUnit(selected.key)
+  if (!secondary) {
+    return `${trim(primaryValue)} ${longUnitLabel(selected.key, primaryValue)}`
+  }
+
+  const rawSecondaryValue = remainder / secondary.seconds
+  const secondaryValue = nearlyEqual(rawSecondaryValue, Math.round(rawSecondaryValue))
+    ? Math.round(rawSecondaryValue)
+    : Number.parseFloat(rawSecondaryValue.toFixed(2))
+
+  if (secondaryValue <= 0) {
+    return `${trim(primaryValue)} ${longUnitLabel(selected.key, primaryValue)}`
+  }
+
+  return `${trim(primaryValue)} ${longUnitLabel(selected.key, primaryValue)}, ${trim(secondaryValue)} ${longUnitLabel(secondary.key, secondaryValue)}`
+}
+
 export function formatExactDaysTooltipText(seconds: number): string {
   const days = seconds / SECONDS_IN_DAY
   return `${trim(days)} ${Math.abs(days) === 1 ? 'day' : 'days'}`
@@ -303,6 +335,29 @@ function shortUnitLabel(unitKey: string, value: number) {
       return 'mo'
     case 'y':
       return singular ? 'yr' : 'yrs'
+    default:
+      return unitKey
+  }
+}
+
+function longUnitLabel(unitKey: string, value: number) {
+  const singular = Math.abs(value) === 1
+
+  switch (unitKey) {
+    case 's':
+      return singular ? 'second' : 'seconds'
+    case 'm':
+      return singular ? 'minute' : 'minutes'
+    case 'h':
+      return singular ? 'hour' : 'hours'
+    case 'd':
+      return singular ? 'day' : 'days'
+    case 'w':
+      return singular ? 'week' : 'weeks'
+    case 'mo':
+      return singular ? 'month' : 'months'
+    case 'y':
+      return singular ? 'year' : 'years'
     default:
       return unitKey
   }

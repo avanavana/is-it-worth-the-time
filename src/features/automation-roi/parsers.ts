@@ -67,10 +67,24 @@ const NUMBER_WORDS: Record<string, number> = {
 }
 
 const FREQUENCY_UNITS: Record<string, FrequencyUnit> = {
+  d: 'day',
   day: 'day',
+  days: 'day',
+  w: 'week',
+  wk: 'week',
+  wks: 'week',
   week: 'week',
+  weeks: 'week',
+  m: 'month',
+  mo: 'month',
+  mon: 'month',
   month: 'month',
+  months: 'month',
+  y: 'year',
+  yr: 'year',
+  yrs: 'year',
   year: 'year',
+  years: 'year',
 }
 
 export function parseTimeSavedInput(raw: string) {
@@ -105,6 +119,10 @@ export function parseFrequencyInput(raw: string) {
     return { ok: true as const, amount: 1, unit: 'year' as const, label: 'Yearly' }
   }
 
+  if (normalized === 'biweekly') {
+    return { ok: true as const, amount: 0.5, unit: 'week' as const, label: 'Biweekly' }
+  }
+
   const numberOnlyMatch = normalized.match(/^(\d*\.?\d+)$/)
   if (numberOnlyMatch) {
     const amount = Number.parseFloat(numberOnlyMatch[1])
@@ -118,9 +136,11 @@ export function parseFrequencyInput(raw: string) {
     }
   }
 
-  const slashMatch = normalized.match(/^(\d*\.?\d+)\s*(x|×)?\s*\/\s*(day|week|month|year)$/)
+  const slashMatch = normalized.match(
+    /^(\d*\.?\d+)\s*(x|×)?\s*\/\s*(d|day|days|w|wk|wks|week|weeks|m|mo|mon|month|months|y|yr|yrs|year|years)$/,
+  )
   const wordsMatch = normalized.match(
-    /^(\d*\.?\d+)\s*(x|×|times?)?\s*(a|per)?\s*(day|week|month|year)$/,
+    /^(\d*\.?\d+)\s*(x|×|times?)?\s*(a|per)?\s*(d|day|days|w|wk|wks|week|weeks|m|mo|mon|month|months|y|yr|yrs|year|years)$/,
   )
   const match = slashMatch ?? wordsMatch
 

@@ -3,19 +3,60 @@
 
 @theme {
   --color-background: #ffffff;
-  --color-foreground: #0f172a;
-  --color-border: #e4e4e7;
-  --color-input: #e4e4e7;
+  --color-foreground: #0f1115;
+  --color-border: #cccccc;
+  --color-input: #cccccc;
   --color-muted: #f4f4f5;
-  --color-muted-foreground: #71717a;
-  --color-primary: #0f172a;
+  --color-muted-foreground: #7c7c7f;
+  --color-primary: #0f1115;
   --color-ring: #a1a1aa;
 
   --text-2xs: 0.625rem;
 }
 
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../assets/fonts/GeistMonoVF.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../assets/fonts/GeistMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../assets/fonts/GeistMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../assets/fonts/GeistMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../assets/fonts/GeistMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  font-family: "Geist Variable", "Geist", "SF Pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -24,12 +65,12 @@
 
 .dark {
   --color-background: #09090b;
-  --color-foreground: #fafafa;
+  --color-foreground: #ffffff;
   --color-border: #27272a;
-  --color-input: #3f3f46;
+  --color-input: #3a3a3a;
   --color-muted: #27272a;
   --color-muted-foreground: #a1a1aa;
-  --color-primary: #fafafa;
+  --color-primary: #ffffff;
   --color-ring: #71717a;
 }
 
@@ -41,4 +82,23 @@ body {
   margin: 0;
   background-color: var(--color-background);
   color: var(--color-foreground);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+@keyframes terminal-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
 }
