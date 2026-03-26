@@ -31,7 +31,7 @@ function Slider({ className, thumbProps, ...props }: SliderProps) {
       <SliderPrimitive.Thumb
         data-slot="slider-thumb"
         className={cn(
-          'block size-4 rounded-full border border-zinc-400 bg-white shadow-sm transition-[color,box-shadow] hover:cursor-grab hover:ring-4 hover:ring-ring/20 active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50',
+          'block size-4 rounded-full border border-ring bg-white shadow-sm transition-[color,box-shadow] hover:cursor-grab hover:ring-4 hover:ring-ring/20 active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50',
           thumbClassName,
         )}
         {...thumbRestProps}

@@ -27,6 +27,7 @@ export interface PersistedAutomationROIState {
   columns: FrequencyColumn[]
   displayMode: DisplayMode
   significantDigits: number
+  autoHideKeyCommands: boolean
 }
 
 export interface CellDetails {

@@ -1,19 +1,6 @@
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
 
-@theme {
-  --color-background: #ffffff;
-  --color-foreground: #0f1115;
-  --color-border: #cccccc;
-  --color-input: #cccccc;
-  --color-muted: #f4f4f5;
-  --color-muted-foreground: #7c7c7f;
-  --color-primary: #0f1115;
-  --color-ring: #a1a1aa;
-
-  --text-2xs: 0.625rem;
-}
-
 @font-face {
   font-family: 'Geist Mono';
   src: url('../assets/fonts/GeistMonoVF.woff2') format('woff2');
@@ -54,6 +41,32 @@
   font-display: swap;
 }
 
+@theme {
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+
+  --color-background: #ffffff;
+  --color-foreground: #0f1115;
+  --color-border: #cccccc;
+  --color-border-muted: #eeeeee;
+  --color-underline: #e6e6e6;
+  --color-input: #cccccc;
+  --color-muted: #f4f4f5;
+  --color-muted-foreground: #7c7c7f;
+  --color-primary: #0f1115;
+  --color-ring: #a1a1aa;
+
+  --text-2xs: 0.625rem;
+
+  --background-image-hatch: repeating-linear-gradient(
+    45deg,
+    var(--color-border-muted),
+    var(--color-border-muted) 1px,
+    var(--color-background) 1px,
+    var(--color-background) 2px
+  );
+}
+
 :root {
   font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
@@ -67,6 +80,8 @@
   --color-background: #09090b;
   --color-foreground: #ffffff;
   --color-border: #27272a;
+  --color-border-muted: #1a1a1c;
+  --color-underline: #3a3a3a;
   --color-input: #3a3a3a;
   --color-muted: #27272a;
   --color-muted-foreground: #a1a1aa;

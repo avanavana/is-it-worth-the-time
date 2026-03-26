@@ -10,11 +10,12 @@ import {
   type ReactNode,
 } from 'react'
 import NumberFlow from '@number-flow/react'
-import { AnimatePresence, motion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
 
 import { PageFooter } from '@/components/layout/page-footer'
+import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
 import { cn } from '@/lib/utils'
 
@@ -26,14 +27,16 @@ import {
 } from '../calculations'
 import { DEFAULT_COLUMNS, DEFAULT_ROWS, DEFAULT_STATE, LIFETIME_PRESETS_YEARS } from '../defaults'
 import { formatCompactCellDisplay, formatForTable, formatPreciseLongText } from '../formatters'
+import type { CompactCellDisplay } from '../formatters'
 import { useAutomationROIStore } from '../hooks/use-automation-roi-store'
 import { parseDurationInput, parseFrequencyInput, parseTimeSavedInput } from '../parsers'
 import { savePersistedState } from '../storage'
-import type { FrequencyColumn, SavingsRow } from '../types'
+import type { CalendarBasis, FrequencyColumn, SavingsRow } from '../types'
 
 type View =
   | 'home'
   | 'table'
+  | 'settings'
   | 'menu-frequency'
   | 'menu-time'
   | 'menu-lifetime'
@@ -43,7 +46,7 @@ type View =
   | 'add-row'
 
 type BaseView = 'home' | 'table'
-type CustomizeSection = 'columns' | 'rows'
+type CustomizeSection = 'columns' | 'rows' | 'actions'
 type MenuCustomKind = 'frequency' | 'time' | 'lifetime'
 
 interface FrequencyOption {
@@ -54,6 +57,12 @@ interface FrequencyOption {
 interface TimeOption {
   label: string
   seconds: number
+}
+
+interface SettingsOption {
+  id: 'exact' | 'calendar' | 'theme' | 'keyboard' | 'reset'
+  label: string
+  value?: string
 }
 
 const HOME_CURSOR_RESULT_INDEX = 3
@@ -83,9 +92,14 @@ const screenVariants = {
   visible: { opacity: 1, y: 0, filter: 'blur(0px)', transition: { duration: 0.22 } },
   exit: { opacity: 0, y: -6, filter: 'blur(1px)', transition: { duration: 0.16 } },
 }
+const reducedMotionScreenVariants = {
+  hidden: { opacity: 1, y: 0, filter: 'blur(0px)' },
+  visible: { opacity: 1, y: 0, filter: 'blur(0px)', transition: { duration: 0 } },
+  exit: { opacity: 1, y: 0, filter: 'blur(0px)', transition: { duration: 0 } },
+}
 
 const interactiveBaseClass =
-  "relative inline-flex items-center whitespace-nowrap pb-[1px] transition-colors before:pointer-events-none before:absolute before:bottom-0 before:left-0 before:h-[2px] before:w-full before:bg-[#e6e6e6] dark:before:bg-[#363636] after:pointer-events-none after:absolute after:bottom-0 after:left-0 after:h-[2px] after:w-full after:origin-right after:scale-x-0 after:bg-foreground after:transition-transform after:duration-300 hover:after:origin-left hover:after:scale-x-100 focus-visible:outline-none"
+  "relative inline-flex items-center whitespace-nowrap pb-[1px] leading-4 transition-colors before:pointer-events-none before:absolute before:bottom-0 before:left-0 before:h-px before:w-full before:bg-underline after:pointer-events-none after:absolute after:bottom-0 after:left-0 after:h-px after:w-full after:bg-foreground after:opacity-0 motion-safe:after:opacity-100 motion-safe:after:origin-right motion-safe:after:scale-x-0 motion-safe:after:transition-transform motion-safe:after:duration-300 motion-safe:hover:after:origin-left motion-safe:hover:after:scale-x-100 motion-reduce:after:scale-x-100 motion-reduce:after:transition-opacity motion-reduce:after:duration-150 motion-reduce:hover:after:opacity-100 focus-visible:outline-none"
 
 const TABLE_CURSOR_BACK_INDEX = 0
 const PARSER_YEAR_SECONDS = 365 * 24 * 60 * 60
@@ -94,6 +108,8 @@ const DEFAULT_FOCUS_TIME_SAVED_SECONDS = 60
 const WORD_REVEAL_STEP_SECONDS = 0.01
 const WORD_REVEAL_DURATION_SECONDS = 0.18
 const HOME_STAGE_STAGGER_MS = 90
+const MENU_OPTION_STAGGER_MS = 85
+const MENU_OPTION_CHAR_MS = 14
 const HOME_REVEAL_STAGE_RESULT = 1
 const HOME_REVEAL_STAGE_SHOW_TABLE = 2
 const HOME_REVEAL_STAGE_RESET = 3
@@ -109,7 +125,11 @@ export function AutomationROIPage() {
     columns,
     displayMode,
     significantDigits,
+    autoHideKeyCommands,
     setLifetimeYears,
+    setCalendarBasis,
+    setDisplayMode,
+    setAutoHideKeyCommands,
     addCustomRow,
     updateCustomRow,
     deleteCustomRow,
@@ -120,8 +140,21 @@ export function AutomationROIPage() {
   } = useAutomationROIStore()
 
   const { resolvedTheme, setTheme, theme } = useTheme()
+  const prefersReducedMotion = useReducedMotion()
+  const activeScreenVariants = prefersReducedMotion
+    ? reducedMotionScreenVariants
+    : screenVariants
+  const stagedRevealMotionProps = prefersReducedMotion
+    ? { initial: false as const, animate: { opacity: 1, y: 0 }, transition: { duration: 0 } }
+    : {
+        initial: { opacity: 0, y: 4 },
+        animate: { opacity: 1, y: 0 },
+        transition: { duration: 0.2 },
+      }
 
   const [view, setView] = useState<View>('home')
+  const [settingsReturnView, setSettingsReturnView] = useState<Exclude<View, 'settings'>>('home')
+  const [settingsIndex, setSettingsIndex] = useState(0)
   const [menuReturnView, setMenuReturnView] = useState<BaseView>('home')
   const [menuIndex, setMenuIndex] = useState(0)
   const [menuCustomKind, setMenuCustomKind] = useState<MenuCustomKind>('frequency')
@@ -132,15 +165,16 @@ export function AutomationROIPage() {
     DEFAULT_FOCUS_TIME_SAVED_SECONDS,
   )
   const [homeCursorIndex, setHomeCursorIndex] = useState(HOME_CURSOR_RESULT_INDEX)
-  const [focusResultMode, setFocusResultMode] = useState<'approx' | 'exact'>('approx')
   const [resultTypewriterRunId, setResultTypewriterRunId] = useState(0)
   const [resultTypewriterDone, setResultTypewriterDone] = useState(false)
   const [homeRevealStage, setHomeRevealStage] = useState(0)
   const [tableCursorIndex, setTableCursorIndex] = useState(1)
+  const previousHasResettableChangesRef = useRef<boolean | null>(null)
 
   const [customizeSection, setCustomizeSection] = useState<CustomizeSection>('columns')
   const [customizeColumnCursorIndex, setCustomizeColumnCursorIndex] = useState(0)
   const [customizeRowCursorIndex, setCustomizeRowCursorIndex] = useState(0)
+  const [customizeActionCursorIndex, setCustomizeActionCursorIndex] = useState(0)
   const [customizeColumnSelectedIndex, setCustomizeColumnSelectedIndex] = useState(0)
   const [customizeRowSelectedIndex, setCustomizeRowSelectedIndex] = useState(0)
   const [customizeBaseline, setCustomizeBaseline] = useState<{
@@ -150,6 +184,8 @@ export function AutomationROIPage() {
 
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null)
   const [editingRowId, setEditingRowId] = useState<string | null>(null)
+  const [addColumnCursorIndex, setAddColumnCursorIndex] = useState(0)
+  const [addRowCursorIndex, setAddRowCursorIndex] = useState(0)
   const [addMenuOptionCursorIndex, setAddMenuOptionCursorIndex] = useState(0)
   const [columnDraft, setColumnDraft] = useState('')
   const [rowDraft, setRowDraft] = useState('')
@@ -157,19 +193,24 @@ export function AutomationROIPage() {
   const addMenuOptionCancelRef = useRef<HTMLButtonElement | null>(null)
   const columnInputRef = useRef<HTMLInputElement | null>(null)
   const rowInputRef = useRef<HTMLInputElement | null>(null)
+  const addColumnCancelRef = useRef<HTMLButtonElement | null>(null)
+  const addColumnDeleteRef = useRef<HTMLButtonElement | null>(null)
+  const addRowCancelRef = useRef<HTMLButtonElement | null>(null)
+  const addRowDeleteRef = useRef<HTMLButtonElement | null>(null)
   const tableSliderTrackRef = useRef<HTMLDivElement | null>(null)
 
   const runsPerYear = getRunsPerYear(focusFrequency, calendarBasis, customDaysPerYear)
   const focusResultSeconds = calculateBreakEvenSeconds(focusTimeSavedSeconds, runsPerYear, lifetimeYears)
   const focusResult = formatCompactCellDisplay(focusResultSeconds)
   const focusResultExactText = formatPreciseLongText(focusResultSeconds)
-  const focusResultApproxText = `${focusResult.approx ? '~' : ''}${formatResultNumber(focusResult.value)} ${focusResult.unit}`
+  const focusResultApproxText = formatFocusApproxText(focusResult, calendarBasis)
   const focusImpossible = isImpossibleCell(focusTimeSavedSeconds, focusFrequency)
   const focusResultTypewriterText = focusImpossible
     ? '—'
-    : focusResultMode === 'exact'
+    : displayMode === 'exact'
       ? focusResultExactText
       : focusResultApproxText
+  const shouldTypeResultText = !prefersReducedMotion && !resultTypewriterDone
   const handleResultTypewriterComplete = useCallback(() => {
     setResultTypewriterDone(true)
   }, [])
@@ -184,6 +225,7 @@ export function AutomationROIPage() {
         columns,
         displayMode,
         significantDigits,
+        autoHideKeyCommands,
       }),
     [
       lifetimeYears,
@@ -193,6 +235,7 @@ export function AutomationROIPage() {
       columns,
       displayMode,
       significantDigits,
+      autoHideKeyCommands,
     ],
   )
   const hasFocusOverrides =
@@ -200,6 +243,23 @@ export function AutomationROIPage() {
     focusFrequency.unit !== DEFAULT_FOCUS_FREQUENCY.unit ||
     focusTimeSavedSeconds !== DEFAULT_FOCUS_TIME_SAVED_SECONDS
   const hasResettableChanges = hasResettableStoreChanges || hasFocusOverrides
+
+  useEffect(() => {
+    const previous = previousHasResettableChangesRef.current
+    if (previous === null) {
+      previousHasResettableChangesRef.current = hasResettableChanges
+      return
+    }
+
+    if (previous === hasResettableChanges) {
+      return
+    }
+
+    previousHasResettableChangesRef.current = hasResettableChanges
+    setTableCursorIndex((current) =>
+      remapTableCursorIndexForResetSlot(current, previous, hasResettableChanges),
+    )
+  }, [hasResettableChanges])
 
   const homeContentCursorMaxIndex = hasResettableChanges ? 5 : 4
   const homeFooterStartIndex = homeContentCursorMaxIndex + 1
@@ -240,6 +300,7 @@ export function AutomationROIPage() {
 
   const isMenuView =
     view === 'menu-frequency' || view === 'menu-time' || view === 'menu-lifetime'
+  const isSettingsView = view === 'settings'
 
   const menuTitle =
     view === 'menu-frequency'
@@ -279,8 +340,7 @@ export function AutomationROIPage() {
             )
             return index >= 0 ? index : menuNewOptionIndex
           })()
-  const menuFooterStartIndex = menuItemCount
-  const menuCursorMaxIndex = menuFooterStartIndex + FOOTER_ACTION_COUNT - 1
+  const menuCursorMaxIndex = menuItemCount - 1
 
   const daysPerYear = getDaysPerYear(calendarBasis, customDaysPerYear)
   const hasCustomCalendar = calendarBasis !== 'calendar'
@@ -317,6 +377,14 @@ export function AutomationROIPage() {
         : false,
     [customizeBaseline, rows, columns],
   )
+  const customizeActionItems = [
+    ...(hasCustomizePendingChanges ? (['save'] as const) : []),
+    'cancel' as const,
+  ]
+  const clampedCustomizeActionCursorIndex = clampIndex(
+    customizeActionCursorIndex,
+    customizeActionItems.length,
+  )
   const persistedLifetimeYears = useMemo(() => {
     const isPreset = LIFETIME_PRESETS_YEARS.some((preset) =>
       valuesNearlyEqual(preset, lifetimeYears),
@@ -343,6 +411,7 @@ export function AutomationROIPage() {
       columns,
       displayMode,
       significantDigits,
+      autoHideKeyCommands,
     })
   }, [
     persistedLifetimeYears,
@@ -352,6 +421,7 @@ export function AutomationROIPage() {
     columns,
     displayMode,
     significantDigits,
+    autoHideKeyCommands,
   ])
 
   useEffect(() => {
@@ -433,6 +503,12 @@ export function AutomationROIPage() {
     )
     setMenuIndex(selectedIndex >= 0 ? selectedIndex : menuNewOptionIndex)
     setView('menu-lifetime')
+  }
+
+  function openSettings(returnView: Exclude<View, 'settings'>) {
+    setSettingsReturnView(returnView)
+    setSettingsIndex(1)
+    setView('settings')
   }
 
   function selectMenuItem(index: number) {
@@ -608,7 +684,7 @@ export function AutomationROIPage() {
     if (index === HOME_CURSOR_RESULT_INDEX) {
       setResultTypewriterDone(false)
       setResultTypewriterRunId((current) => current + 1)
-      setFocusResultMode((current) => (current === 'approx' ? 'exact' : 'approx'))
+      setDisplayMode(displayMode === 'exact' ? 'humanized' : 'exact')
       return
     }
 
@@ -665,6 +741,15 @@ export function AutomationROIPage() {
 
     if (event.key === 'Escape') {
       event.preventDefault()
+      if (
+        activeHomeCursorIndex === HOME_CURSOR_RESULT_INDEX &&
+        hasResettableChanges &&
+        homeRevealStage >= HOME_REVEAL_STAGE_RESET
+      ) {
+        resetAllDefaults()
+        return
+      }
+
       setHomeCursorIndex(HOME_CURSOR_RESULT_INDEX)
     }
   }
@@ -709,10 +794,7 @@ export function AutomationROIPage() {
 
       if (menuIndex < menuCancelIndex) {
         selectMenuItem(menuIndex)
-        return
       }
-
-      handleFooterAction(menuIndex - menuFooterStartIndex)
     }
 
     if (event.key === 'Escape') {
@@ -812,6 +894,78 @@ export function AutomationROIPage() {
     }
   }
 
+  function activateSettingsOption(index: number) {
+    const option = settingsOptions[index]
+    if (!option) {
+      return
+    }
+
+    if (option.id === 'reset') {
+      resetAllDefaults()
+      return
+    }
+
+    if (option.id === 'exact') {
+      setDisplayMode(displayMode === 'exact' ? 'humanized' : 'exact')
+      return
+    }
+
+    if (option.id === 'calendar') {
+      setCalendarBasis(calendarBasis === 'workdays' ? 'calendar' : 'workdays')
+      return
+    }
+
+    if (option.id === 'keyboard') {
+      setAutoHideKeyCommands(!autoHideKeyCommands)
+      return
+    }
+
+    cycleTheme()
+  }
+
+  function handleSettingsKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (!isSettingsView) {
+      return
+    }
+
+    const moveBackward =
+      event.key === 'ArrowUp' ||
+      event.key === 'ArrowLeft' ||
+      (event.key === 'Tab' && event.shiftKey)
+    const moveForward =
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowRight' ||
+      (event.key === 'Tab' && !event.shiftKey)
+
+    if (moveBackward || moveForward) {
+      event.preventDefault()
+      setSettingsIndex((current) => {
+        if (moveBackward) {
+          return current === 0 ? settingsCursorMaxIndex : current - 1
+        }
+
+        return current === settingsCursorMaxIndex ? 0 : current + 1
+      })
+      return
+    }
+
+    if (isActivationKey(event.key)) {
+      event.preventDefault()
+
+      if (settingsIndex === settingsBackIndex) {
+        setView(settingsReturnView)
+        return
+      }
+
+      activateSettingsOption(settingsIndex - settingsOptionStartIndex)
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setView(settingsReturnView)
+    }
+  }
+
   function openCustomize() {
     const firstCustomColumn = columnItems.findIndex(
       (item) => item.kind === 'column' && item.column.isCustom,
@@ -822,6 +976,7 @@ export function AutomationROIPage() {
     setCustomizeColumnSelectedIndex(defaultColumnIndex)
     setCustomizeRowCursorIndex((current) => clampIndex(current, rowItems.length))
     setCustomizeRowSelectedIndex((current) => clampIndex(current, rowItems.length))
+    setCustomizeActionCursorIndex(0)
     setCustomizeBaseline({
       rows: rows.map((row) => ({ ...row })),
       columns: columns.map((column) => ({ ...column })),
@@ -833,7 +988,6 @@ export function AutomationROIPage() {
     resetDefaults()
     setFocusFrequency({ ...DEFAULT_FOCUS_FREQUENCY })
     setFocusTimeSavedSeconds(DEFAULT_FOCUS_TIME_SAVED_SECONDS)
-    setFocusResultMode('approx')
     setResultTypewriterDone(false)
     setResultTypewriterRunId((current) => current + 1)
   }
@@ -864,6 +1018,7 @@ export function AutomationROIPage() {
       if (item.kind === 'new-column') {
         setEditingColumnId(null)
         setColumnDraft('')
+        setAddColumnCursorIndex(0)
         setView('add-column')
         return
       }
@@ -875,6 +1030,7 @@ export function AutomationROIPage() {
 
       setEditingColumnId(item.column.id)
       setColumnDraft(`${strip(item.column.amount)}/${item.column.unit}`)
+      setAddColumnCursorIndex(0)
       setView('add-column')
       return
     }
@@ -887,6 +1043,7 @@ export function AutomationROIPage() {
     if (item.kind === 'new-row') {
       setEditingRowId(null)
       setRowDraft('')
+      setAddRowCursorIndex(0)
       setView('add-row')
       return
     }
@@ -898,10 +1055,15 @@ export function AutomationROIPage() {
 
     setEditingRowId(item.row.id)
     setRowDraft(formatLongDuration(item.row.seconds))
+    setAddRowCursorIndex(0)
     setView('add-row')
   }
 
   function deleteActiveCustomizeItem() {
+    if (customizeSection === 'actions') {
+      return
+    }
+
     if (customizeSection === 'columns') {
       const item = columnItems[clampedCustomizeColumnCursorIndex]
       if (item?.kind === 'column' && item.column.isCustom) {
@@ -927,40 +1089,121 @@ export function AutomationROIPage() {
       return
     }
 
-    const activeItems = customizeSection === 'columns' ? columnItems : rowItems
-    const setActiveCursorIndex =
-      customizeSection === 'columns'
-        ? setCustomizeColumnCursorIndex
-        : setCustomizeRowCursorIndex
-
-    if (event.key === 'ArrowDown') {
+    if (event.key === 'Tab') {
       event.preventDefault()
-      setActiveCursorIndex((current) =>
-        Math.min(current + 1, activeItems.length - 1),
-      )
-    }
+      const cancelActionIndex = Math.max(0, customizeActionItems.indexOf('cancel'))
 
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setActiveCursorIndex((current) => Math.max(current - 1, 0))
-    }
-
-    if (
-      event.key === 'ArrowRight' ||
-      event.key === 'ArrowLeft' ||
-      event.key === 'Tab'
-    ) {
-      event.preventDefault()
-      if (event.key === 'ArrowLeft' || (event.key === 'Tab' && event.shiftKey)) {
-        setCustomizeSection((current) => (current === 'columns' ? 'rows' : 'columns'))
+      if (event.shiftKey) {
+        if (customizeSection === 'columns') {
+          setCustomizeSection('actions')
+          setCustomizeActionCursorIndex(cancelActionIndex)
+        } else if (customizeSection === 'actions') {
+          setCustomizeSection('rows')
+          setCustomizeRowCursorIndex(0)
+        } else {
+          setCustomizeSection('columns')
+          setCustomizeColumnCursorIndex(0)
+        }
       } else {
-        setCustomizeSection((current) => (current === 'rows' ? 'columns' : 'rows'))
+        if (customizeSection === 'columns') {
+          setCustomizeSection('rows')
+          setCustomizeRowCursorIndex(0)
+        } else if (customizeSection === 'rows') {
+          setCustomizeSection('actions')
+          setCustomizeActionCursorIndex(cancelActionIndex)
+        } else {
+          setCustomizeSection('columns')
+          setCustomizeColumnCursorIndex(0)
+        }
+      }
+      return
+    }
+
+    const moveBackward =
+      event.key === 'ArrowUp' || event.key === 'ArrowLeft'
+    const moveForward =
+      event.key === 'ArrowDown' || event.key === 'ArrowRight'
+
+    if (moveBackward || moveForward) {
+      event.preventDefault()
+
+      const step = moveForward ? 1 : -1
+      const actionCount = customizeActionItems.length
+
+      if (customizeSection === 'columns') {
+        if (step > 0) {
+          if (clampedCustomizeColumnCursorIndex < columnItems.length - 1) {
+            setCustomizeColumnCursorIndex((current) =>
+              Math.min(current + 1, columnItems.length - 1),
+            )
+          } else {
+            setCustomizeSection('rows')
+            setCustomizeRowCursorIndex(0)
+          }
+        } else if (clampedCustomizeColumnCursorIndex > 0) {
+          setCustomizeColumnCursorIndex((current) => Math.max(current - 1, 0))
+        } else if (actionCount > 0) {
+          setCustomizeSection('actions')
+          setCustomizeActionCursorIndex(actionCount - 1)
+        } else {
+          setCustomizeSection('rows')
+          setCustomizeRowCursorIndex(Math.max(0, rowItems.length - 1))
+        }
+        return
+      }
+
+      if (customizeSection === 'rows') {
+        if (step > 0) {
+          if (clampedCustomizeRowCursorIndex < rowItems.length - 1) {
+            setCustomizeRowCursorIndex((current) => Math.min(current + 1, rowItems.length - 1))
+          } else if (actionCount > 0) {
+            setCustomizeSection('actions')
+            setCustomizeActionCursorIndex(0)
+          } else {
+            setCustomizeSection('columns')
+            setCustomizeColumnCursorIndex(0)
+          }
+        } else if (clampedCustomizeRowCursorIndex > 0) {
+          setCustomizeRowCursorIndex((current) => Math.max(current - 1, 0))
+        } else {
+          setCustomizeSection('columns')
+          setCustomizeColumnCursorIndex(Math.max(0, columnItems.length - 1))
+        }
+        return
+      }
+
+      if (step > 0) {
+        if (clampedCustomizeActionCursorIndex < actionCount - 1) {
+          setCustomizeActionCursorIndex((current) => Math.min(current + 1, actionCount - 1))
+        } else {
+          setCustomizeSection('columns')
+          setCustomizeColumnCursorIndex(0)
+        }
+      } else if (clampedCustomizeActionCursorIndex > 0) {
+        setCustomizeActionCursorIndex((current) => Math.max(current - 1, 0))
+      } else {
+        setCustomizeSection('rows')
+        setCustomizeRowCursorIndex(Math.max(0, rowItems.length - 1))
       }
     }
 
     if (isActivationKey(event.key)) {
       event.preventDefault()
-      activateCustomizeItem()
+      if (customizeSection === 'columns') {
+        activateCustomizeItem('columns', clampedCustomizeColumnCursorIndex)
+        return
+      }
+      if (customizeSection === 'rows') {
+        activateCustomizeItem('rows', clampedCustomizeRowCursorIndex)
+        return
+      }
+
+      const action = customizeActionItems[clampedCustomizeActionCursorIndex]
+      if (action === 'save') {
+        setView('table')
+        return
+      }
+      setView('table')
     }
 
     if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -971,6 +1214,152 @@ export function AutomationROIPage() {
     if (event.key === 'Escape') {
       event.preventDefault()
       setView('table')
+    }
+  }
+
+  function closeAddColumn() {
+    setEditingColumnId(null)
+    setColumnDraft('')
+    setAddColumnCursorIndex(0)
+    setView('customize')
+  }
+
+  function closeAddRow() {
+    setEditingRowId(null)
+    setRowDraft('')
+    setAddRowCursorIndex(0)
+    setView('customize')
+  }
+
+  function focusAddColumnCursor(index: number) {
+    if (index === 0) {
+      columnInputRef.current?.focus({ preventScroll: true })
+      return
+    }
+
+    if (index === 1) {
+      addColumnCancelRef.current?.focus({ preventScroll: true })
+      return
+    }
+
+    addColumnDeleteRef.current?.focus({ preventScroll: true })
+  }
+
+  function focusAddRowCursor(index: number) {
+    if (index === 0) {
+      rowInputRef.current?.focus({ preventScroll: true })
+      return
+    }
+
+    if (index === 1) {
+      addRowCancelRef.current?.focus({ preventScroll: true })
+      return
+    }
+
+    addRowDeleteRef.current?.focus({ preventScroll: true })
+  }
+
+  function handleAddColumnKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (view !== 'add-column') {
+      return
+    }
+
+    const moveBackward =
+      event.key === 'ArrowUp' ||
+      event.key === 'ArrowLeft' ||
+      (event.key === 'Tab' && event.shiftKey)
+    const moveForward =
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowRight' ||
+      (event.key === 'Tab' && !event.shiftKey)
+    const maxIndex = editingColumnId ? 2 : 1
+
+    if (moveBackward || moveForward) {
+      event.preventDefault()
+      const nextIndex = moveForward
+        ? addColumnCursorIndex === maxIndex
+          ? 0
+          : addColumnCursorIndex + 1
+        : addColumnCursorIndex === 0
+          ? maxIndex
+          : addColumnCursorIndex - 1
+      setAddColumnCursorIndex(nextIndex)
+      focusAddColumnCursor(nextIndex)
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeAddColumn()
+      return
+    }
+
+    if (event.key === 'Enter' && addColumnCursorIndex === 0) {
+      event.preventDefault()
+      submitColumn()
+      return
+    }
+
+    if (isActivationKey(event.key) && addColumnCursorIndex !== 0) {
+      event.preventDefault()
+      if (addColumnCursorIndex === 1) {
+        closeAddColumn()
+        return
+      }
+
+      deleteEditingColumn()
+    }
+  }
+
+  function handleAddRowKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (view !== 'add-row') {
+      return
+    }
+
+    const moveBackward =
+      event.key === 'ArrowUp' ||
+      event.key === 'ArrowLeft' ||
+      (event.key === 'Tab' && event.shiftKey)
+    const moveForward =
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowRight' ||
+      (event.key === 'Tab' && !event.shiftKey)
+    const maxIndex = editingRowId ? 2 : 1
+
+    if (moveBackward || moveForward) {
+      event.preventDefault()
+      const nextIndex = moveForward
+        ? addRowCursorIndex === maxIndex
+          ? 0
+          : addRowCursorIndex + 1
+        : addRowCursorIndex === 0
+          ? maxIndex
+          : addRowCursorIndex - 1
+      setAddRowCursorIndex(nextIndex)
+      focusAddRowCursor(nextIndex)
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeAddRow()
+      return
+    }
+
+    if (event.key === 'Enter' && addRowCursorIndex === 0) {
+      event.preventDefault()
+      submitRow()
+      return
+    }
+
+    if (isActivationKey(event.key) && addRowCursorIndex !== 0) {
+      event.preventDefault()
+      if (addRowCursorIndex === 1) {
+        closeAddRow()
+        return
+      }
+
+      deleteEditingRow()
     }
   }
 
@@ -1124,6 +1513,14 @@ export function AutomationROIPage() {
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
+  function getSettingsReturnViewForCurrentView(): Exclude<View, 'settings'> {
+    if (view === 'settings') {
+      return settingsReturnView
+    }
+
+    return view
+  }
+
   function handleFooterAction(index: number) {
     if (index === 0) {
       openExternal('https://www.avanavana.com')
@@ -1141,12 +1538,41 @@ export function AutomationROIPage() {
     }
 
     if (index === 3) {
-      cycleTheme()
+      if (view !== 'settings') {
+        openSettings(getSettingsReturnViewForCurrentView())
+      }
     }
   }
 
   const terminalThemeLabel =
     theme === 'system' ? 'System' : resolvedTheme === 'dark' ? 'Dark' : 'Light'
+  const settingsOptions: SettingsOption[] = [
+    {
+      id: 'exact' as const,
+      label: 'Show exact values:',
+      value: displayMode === 'exact' ? 'Yes' : 'No',
+    },
+    {
+      id: 'calendar' as const,
+      label: 'Calendar basis:',
+      value:
+        calendarBasis === 'workdays'
+          ? '8-hour workday/5-day workweek/260-day work year'
+          : '24-hour day/7-day week/365-day year',
+    },
+    { id: 'theme' as const, label: 'Theme:', value: terminalThemeLabel },
+    {
+      id: 'keyboard' as const,
+      label: 'Auto-hide key commands:',
+      value: autoHideKeyCommands ? 'Yes' : 'No',
+    },
+    ...(hasResettableChanges
+      ? [{ id: 'reset' as const, label: 'Reset to defaults' }]
+      : []),
+  ]
+  const settingsBackIndex = 0
+  const settingsOptionStartIndex = 1
+  const settingsCursorMaxIndex = settingsOptions.length
 
   const homeText1 = 'If, by optimizing a task that I do '
   const homeText2 = ', I can save'
@@ -1183,9 +1609,16 @@ export function AutomationROIPage() {
       return
     }
 
+    const maxStage = HOME_REVEAL_STAGE_FOOTER_START + FOOTER_ACTION_COUNT - 1
+    if (prefersReducedMotion) {
+      const reducedTimer = window.setTimeout(() => setHomeRevealStage(maxStage), 0)
+      return () => {
+        window.clearTimeout(reducedTimer)
+      }
+    }
+
     const resetTimer = window.setTimeout(() => setHomeRevealStage(0), 0)
     const baseDelayMs = Math.max(0, Math.round(homeSentenceEndDelaySeconds * 1000))
-    const maxStage = HOME_REVEAL_STAGE_FOOTER_START + FOOTER_ACTION_COUNT - 1
     const stageTimers = Array.from({ length: maxStage }, (_, index) =>
       window.setTimeout(
         () => setHomeRevealStage(index + 1),
@@ -1197,7 +1630,7 @@ export function AutomationROIPage() {
       window.clearTimeout(resetTimer)
       stageTimers.forEach((timer) => window.clearTimeout(timer))
     }
-  }, [homeSentenceEndDelaySeconds, view])
+  }, [homeSentenceEndDelaySeconds, prefersReducedMotion, view])
 
   return (
     <main className="min-h-screen bg-background px-4 py-6 text-foreground sm:px-12 sm:py-12">
@@ -1205,7 +1638,7 @@ export function AutomationROIPage() {
         {view === 'home' ? (
           <motion.section
             key="home"
-            variants={screenVariants}
+            variants={activeScreenVariants}
             initial="hidden"
             animate="visible"
             exit="exit"
@@ -1222,7 +1655,11 @@ export function AutomationROIPage() {
                 <TypedInlineSlot delaySteps={homeFlowStep1}>
                   <span className="mr-[12px] inline-flex">
                     <InlineAction
-                      label={`${formatFrequencyLong(focusFrequency)} ⏷`}
+                      label={
+                        <InlineSelectTriggerLabel
+                          text={formatFrequencyLong(focusFrequency)}
+                        />
+                      }
                       onClick={() => handleHomeAction(0)}
                       active={activeHomeCursorIndex === 0}
                       variant="strong"
@@ -1235,7 +1672,11 @@ export function AutomationROIPage() {
                 <TypedInlineSlot delaySteps={homeFlowStep2 + getFlowStepCount(homeText2)}>
                   <span className="mr-[12px] inline-flex">
                     <InlineAction
-                      label={`${formatLongDuration(focusTimeSavedSeconds)} ⏷`}
+                      label={
+                        <InlineSelectTriggerLabel
+                          text={formatLongDuration(focusTimeSavedSeconds)}
+                        />
+                      }
                       onClick={() => handleHomeAction(1)}
                       active={activeHomeCursorIndex === 1}
                       variant="strong"
@@ -1247,7 +1688,11 @@ export function AutomationROIPage() {
                 <TypedInlineSlot delaySteps={homeFlowStep3 + getFlowStepCount(homeText3)}>
                   <span className="mr-[12px] inline-flex">
                     <InlineAction
-                      label={`${formatLifetimePeriod(focusLifetimeYearsRounded(lifetimeYears))} ⏷`}
+                      label={
+                        <InlineSelectTriggerLabel
+                          text={formatLifetimePeriod(focusLifetimeYearsRounded(lifetimeYears))}
+                        />
+                      }
                       onClick={() => handleHomeAction(2)}
                       active={activeHomeCursorIndex === 2}
                       variant="strong"
@@ -1260,9 +1705,7 @@ export function AutomationROIPage() {
 
               {homeRevealStage >= HOME_REVEAL_STAGE_RESULT ? (
                 <motion.div
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2 }}
+                  {...stagedRevealMotionProps}
                   className="mt-12 text-[12px]"
                 >
                   <div className="flex items-center">
@@ -1271,10 +1714,10 @@ export function AutomationROIPage() {
                       className="relative inline-flex h-6 cursor-pointer items-center whitespace-nowrap pr-[12px] font-bold text-foreground focus-visible:outline-none"
                       onClick={() => handleHomeAction(HOME_CURSOR_RESULT_INDEX)}
                     >
-                      {resultTypewriterDone ? (
+                      {!shouldTypeResultText ? (
                         focusImpossible ? (
                           <span>—</span>
-                        ) : focusResultMode === 'exact' ? (
+                        ) : displayMode === 'exact' ? (
                           <ExactResultText text={focusResultExactText} />
                         ) : (
                           <span className="whitespace-nowrap">
@@ -1290,7 +1733,10 @@ export function AutomationROIPage() {
                         />
                       )}
                       <TerminalCursor
-                        active={activeHomeCursorIndex === HOME_CURSOR_RESULT_INDEX && resultTypewriterDone}
+                        active={
+                          activeHomeCursorIndex === HOME_CURSOR_RESULT_INDEX &&
+                          (prefersReducedMotion || resultTypewriterDone)
+                        }
                         className="absolute right-0 top-1/2 -translate-y-1/2"
                       />
                     </button>
@@ -1298,13 +1744,9 @@ export function AutomationROIPage() {
                 </motion.div>
               ) : null}
 
-              <div className="mt-6 flex flex-wrap items-center gap-x-8 gap-y-3 text-[12px]">
+              <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-3 text-[12px]">
                 {homeRevealStage >= HOME_REVEAL_STAGE_SHOW_TABLE ? (
-                  <motion.div
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.2 }}
-                  >
+                  <motion.div {...stagedRevealMotionProps}>
                     <InlineAction
                       label="Show full table 🡪"
                       onClick={() => handleHomeAction(4)}
@@ -1314,25 +1756,24 @@ export function AutomationROIPage() {
                 ) : null}
 
                 {hasResettableChanges && homeRevealStage >= HOME_REVEAL_STAGE_RESET ? (
-                  <motion.div
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <InlineAction
-                      label="⟲ Reset to defaults"
-                      onClick={() => handleHomeAction(5)}
-                      active={activeHomeCursorIndex === 5}
-                    />
-                  </motion.div>
+                  <>
+                    <motion.div {...stagedRevealMotionProps}>
+                      <Separator aria-hidden />
+                    </motion.div>
+                    <motion.div {...stagedRevealMotionProps}>
+                      <InlineAction
+                        label="⟲ Reset to defaults"
+                        onClick={() => handleHomeAction(5)}
+                        active={activeHomeCursorIndex === 5}
+                      />
+                    </motion.div>
+                  </>
                 ) : null}
               </div>
 
               {hasCustomCalendar && homeRevealStage >= HOME_REVEAL_STAGE_NOTE ? (
                 <motion.p
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2 }}
+                  {...stagedRevealMotionProps}
                   className="mt-3 text-[10px] text-muted-foreground"
                 >
                   * Using {daysPerYear} days per year.
@@ -1341,7 +1782,6 @@ export function AutomationROIPage() {
             </div>
 
             <PageFooter
-              themeLabel={terminalThemeLabel}
               activeIndex={
                 activeHomeCursorIndex >= homeFooterStartIndex
                   ? activeHomeCursorIndex - homeFooterStartIndex
@@ -1349,8 +1789,10 @@ export function AutomationROIPage() {
               }
               onAction={(index) => handleHomeAction(homeFooterStartIndex + index)}
               revealCount={homeFooterRevealCount}
+              autoHideKeyCommands={autoHideKeyCommands}
+              keyboardCommandsVisible={homeFooterRevealCount > 0}
               className={cn(
-                'transition-all duration-200',
+                !prefersReducedMotion && 'transition-all duration-200',
                 homeFooterRevealCount > 0
                   ? 'opacity-100 translate-y-0'
                   : 'pointer-events-none opacity-0 translate-y-1',
@@ -1362,7 +1804,7 @@ export function AutomationROIPage() {
         {view === 'table' ? (
           <motion.section
             key="table"
-            variants={screenVariants}
+            variants={activeScreenVariants}
             initial="hidden"
             animate="visible"
             exit="exit"
@@ -1382,7 +1824,7 @@ export function AutomationROIPage() {
                 />
                 {hasResettableChanges ? (
                   <>
-                    <span className="text-[#dcdcdc]">│</span>
+                    <Separator aria-hidden />
                     <InlineAction
                       label="⟲ Reset to defaults"
                       onClick={() => handleTableAction(tableResetIndex)}
@@ -1393,12 +1835,16 @@ export function AutomationROIPage() {
               </div>
 
               <div className="mb-8 flex max-w-[760px] items-start text-[12px]">
-                <p className="m-0 text-[12px] font-medium leading-4 text-muted-foreground">
+                <p className="m-0 text-[12px] font-medium leading-6 text-muted-foreground">
                   <TypedWords text={tableText1} />
                   <TypedInlineSlot delaySteps={tableFlowStep1}>
                     <span className="mr-[12px] inline-flex">
                       <InlineAction
-                        label={`${formatLifetimeLong(lifetimeYears)} ⏷`}
+                        label={
+                          <InlineSelectTriggerLabel
+                            text={formatLifetimeLong(lifetimeYears)}
+                          />
+                        }
                         onClick={() => handleTableAction(tableLifetimeCursorIndex)}
                         active={activeTableCursorIndex === tableLifetimeCursorIndex}
                         variant="strong"
@@ -1426,12 +1872,23 @@ export function AutomationROIPage() {
                       type="button"
                       onClick={() => setTableCursorIndex(tableSliderIndicatorCursorIndex)}
                       onPointerDown={handleLifetimeIndicatorPointerDown}
-                      className="absolute top-0 inline-flex -translate-x-1/2 items-center pr-[12px] font-bold text-foreground focus-visible:outline-none"
+                      className={cn(
+                        'group absolute top-0 inline-flex -translate-x-1/2 items-center pr-[12px] text-[10px] font-bold text-foreground focus-visible:outline-none',
+                      )}
                       style={{ left: `${tableLifetimeSliderPercent}%` }}
                     >
-                      <span className="text-[#aaa] dark:text-[#777]">←</span>
-                      <span className="mx-1">{formatLifetimeShort(lifetimeYears)}</span>
-                      <span className="text-[#aaa] dark:text-[#777]">→</span>
+                      <span className="text-underline">←</span>
+                      <span
+                        className={cn(
+                          interactiveBaseClass,
+                          'mx-1 group-hover:motion-safe:after:origin-left group-hover:motion-safe:after:scale-x-100 group-hover:motion-reduce:after:opacity-100',
+                          activeTableCursorIndex === tableSliderIndicatorCursorIndex &&
+                            'motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100',
+                        )}
+                      >
+                        {formatLifetimeShort(lifetimeYears)}
+                      </span>
+                      <span className="text-underline">→</span>
                       <TerminalCursor
                         active={activeTableCursorIndex === tableSliderIndicatorCursorIndex}
                         className="absolute right-0 top-1/2 -translate-y-1/2"
@@ -1447,7 +1904,7 @@ export function AutomationROIPage() {
                         const index = Math.round(value[0] ?? tableLifetimeIndex)
                         setLifetimeFromSliderIndex(index)
                       }}
-                      className="py-2 [&_[data-slot=slider-track]]:h-px [&_[data-slot=slider-track]]:rounded-none [&_[data-slot=slider-track]]:bg-border [&_[data-slot=slider-range]]:bg-foreground"
+                      className="py-2 **:data-[slot=slider-track]:h-px **:data-[slot=slider-track]:rounded-none **:data-[slot=slider-track]:bg-underline **:data-[slot=slider-range]:bg-foreground"
                       thumbProps={{
                         className:
                           'size-[44px] rounded-none border-0 bg-transparent opacity-0 shadow-none hover:ring-0 active:ring-0 focus-visible:ring-0',
@@ -1492,16 +1949,16 @@ export function AutomationROIPage() {
                 </div>
               </div>
 
-              <div className="mt-2 flex max-w-[640px] flex-wrap items-center gap-x-4 gap-y-2 pl-[46px] text-[10px] text-muted-foreground">
+              <div className="mt-2 flex max-w-[640px] flex-wrap items-center gap-x-4 gap-y-2 pl-[46px] text-[10px] text-muted-foreground h-3">
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block size-[12px] border border-border bg-[repeating-linear-gradient(-45deg,#ececec,#ececec_2px,#f5f5f5_2px,#f5f5f5_4px)] dark:bg-[repeating-linear-gradient(-45deg,#181818,#181818_2px,#1f1f1f_2px,#1f1f1f_4px)]" />
+                  <span className="inline-block size-[12px] border border-border bg-hatch" />
                   Not Possible
                 </span>
-                <span className="text-[#dcdcdc]">│</span>
+                <Separator />
                 <span>Rows: Time saved per task</span>
-                <span className="text-[#dcdcdc]">│</span>
+                <Separator />
                 <span>Columns: Task frequency</span>
-                <span className="text-[#dcdcdc]">│</span>
+                <Separator />
                 <InlineAction
                   label="Customize"
                   onClick={() => handleTableAction(tableCustomizeCursorIndex)}
@@ -1510,27 +1967,115 @@ export function AutomationROIPage() {
                 />
               </div>
 
-              {hasCustomCalendar ? (
-                <p className="mt-2 text-[10px] text-muted-foreground">* Using {daysPerYear} days per year.</p>
+              {calendarBasis === 'workdays' ? (
+                <p className="mt-2 text-[10px] text-muted-foreground">
+                  *based on an 8-hour work day, 40-hour work week, and 260-day work year
+                </p>
               ) : null}
             </div>
 
             <PageFooter
-              themeLabel={terminalThemeLabel}
               activeIndex={
                 activeTableCursorIndex >= tableFooterStartIndex
                   ? activeTableCursorIndex - tableFooterStartIndex
                   : -1
               }
               onAction={(index) => handleTableAction(tableFooterStartIndex + index)}
+              autoHideKeyCommands={autoHideKeyCommands}
+              keyboardCommandsVisible
             />
+          </motion.section>
+        ) : null}
+
+        {view === 'settings' ? (
+          <motion.section
+            key="settings"
+            variants={activeScreenVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="flex min-h-[calc(100vh-48px)] sm:min-h-[calc(100vh-96px)] w-full max-w-[1200px] flex-col"
+          >
+            <TerminalHeader title="Settings" />
+
+            <div
+              className="grow max-w-[640px] outline-none"
+              tabIndex={0}
+              data-screen-autofocus-view="settings"
+              onKeyDown={handleSettingsKeyDown}
+            >
+              <div className="mb-8 flex items-center gap-4 text-[12px]">
+                <InlineAction
+                  label={
+                    <MenuOptionTypewriter
+                      text="🡨 Back"
+                      startDelayMs={0}
+                      animateOnlyOnMount
+                    />
+                  }
+                  onClick={() => setView(settingsReturnView)}
+                  active={settingsIndex === settingsBackIndex}
+                />
+              </div>
+
+              <div className="text-[12px] leading-6">
+                {settingsOptions.map((option, index) => {
+                  const optionIndex = settingsOptionStartIndex + index
+
+                  return (
+                    <div key={option.id} className="flex items-center gap-2">
+                      <div className="w-3 text-foreground">
+                        {optionIndex === settingsIndex ? '🡲' : '\u00A0'}
+                      </div>
+                      <button
+                        type="button"
+                        className={cn(
+                          'cursor-pointer text-left leading-6 outline-none transition-colors',
+                          optionIndex === settingsIndex
+                            ? 'font-bold text-foreground'
+                            : 'font-medium text-muted-foreground hover:text-foreground',
+                        )}
+                        onMouseEnter={() => setSettingsIndex(optionIndex)}
+                        onClick={() => activateSettingsOption(index)}
+                      >
+                        <span
+                          className={cn(
+                            option.value
+                              ? 'grid grid-cols-[24ch_1fr] items-baseline gap-x-8 leading-normal'
+                              : 'block',
+                          )}
+                        >
+                          <span>
+                            <MenuOptionTypewriter
+                              text={option.label}
+                              startDelayMs={optionIndex * MENU_OPTION_STAGGER_MS}
+                              animateOnlyOnMount
+                            />
+                          </span>
+                          {option.value ? (
+                            <span>
+                              <MenuOptionTypewriter
+                                text={option.value}
+                                startDelayMs={optionIndex * MENU_OPTION_STAGGER_MS}
+                                animateOnlyOnMount
+                              />
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
           </motion.section>
         ) : null}
 
         {isMenuView ? (
           <motion.section
             key={view}
-            variants={screenVariants}
+            variants={activeScreenVariants}
             initial="hidden"
             animate="visible"
             exit="exit"
@@ -1552,16 +2097,19 @@ export function AutomationROIPage() {
                       type="button"
                       className={cn(
                         'cursor-pointer text-left leading-6 outline-none transition-colors',
-                        index === menuSelectedIndex
+                        index === menuIndex
                           ? 'font-bold text-foreground'
-                          : index === menuIndex
-                            ? 'font-medium text-foreground'
+                          : index === menuSelectedIndex
+                          ? 'font-bold text-foreground'
                           : 'font-medium text-muted-foreground hover:text-foreground',
                       )}
                       onMouseEnter={() => setMenuIndex(index)}
                       onClick={() => selectMenuItem(index)}
                     >
-                      {label}
+                      <MenuOptionTypewriter
+                        text={label}
+                        startDelayMs={index * MENU_OPTION_STAGGER_MS}
+                      />
                     </button>
                   </div>
                 ))}
@@ -1572,16 +2120,19 @@ export function AutomationROIPage() {
                     type="button"
                     className={cn(
                       'cursor-pointer text-left leading-6 outline-none transition-colors',
-                      menuSelectedIndex === menuNewOptionIndex
+                      menuIndex === menuNewOptionIndex
                         ? 'font-bold text-foreground'
-                        : menuIndex === menuNewOptionIndex
-                          ? 'font-medium text-foreground'
-                          : 'font-medium text-muted-foreground hover:text-foreground',
+                        : menuSelectedIndex === menuNewOptionIndex
+                        ? 'font-bold text-foreground'
+                        : 'font-medium text-muted-foreground hover:text-foreground',
                     )}
                     onMouseEnter={() => setMenuIndex(menuNewOptionIndex)}
                     onClick={openNewMenuOption}
                   >
-                    New option…
+                    <MenuOptionTypewriter
+                      text="New option…"
+                      startDelayMs={menuNewOptionIndex * MENU_OPTION_STAGGER_MS}
+                    />
                   </button>
                 </div>
 
@@ -1589,40 +2140,36 @@ export function AutomationROIPage() {
 
                 <div className="flex items-center gap-2">
                   <div className="w-3 text-foreground">{menuIndex === menuCancelIndex ? '🡲' : '\u00A0'}</div>
-                  <button
-                    type="button"
-                    className={cn(
-                      interactiveBaseClass,
-                      'inline-block w-fit cursor-pointer text-left leading-6 outline-none align-top pb-0 before:bottom-[1px] after:bottom-[1px]',
-                      menuIndex === menuCancelIndex && 'after:origin-left after:scale-x-100',
-                      menuIndex === menuCancelIndex
+                    <button
+                      type="button"
+                      className={cn(
+                        interactiveBaseClass,
+                        'inline-flex w-fit items-center cursor-pointer text-left outline-none align-top',
+                        menuIndex === menuCancelIndex &&
+                          'motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100',
+                        menuIndex === menuCancelIndex
                         ? 'font-bold text-foreground'
                         : 'font-medium text-muted-foreground hover:text-foreground',
                     )}
                     onMouseEnter={() => setMenuIndex(menuCancelIndex)}
                     onClick={() => setView(menuReturnView)}
                   >
-                    Cancel
+                    <MenuOptionTypewriter
+                      text="Cancel"
+                      startDelayMs={menuCancelIndex * MENU_OPTION_STAGGER_MS}
+                    />
                   </button>
                 </div>
               </div>
             </div>
 
-            <PageFooter
-              themeLabel={terminalThemeLabel}
-              activeIndex={menuIndex >= menuFooterStartIndex ? menuIndex - menuFooterStartIndex : -1}
-              onAction={(index) => {
-                setMenuIndex(menuFooterStartIndex + index)
-                handleFooterAction(index)
-              }}
-            />
           </motion.section>
         ) : null}
 
         {view === 'customize' ? (
           <motion.section
             key="customize"
-            variants={screenVariants}
+            variants={activeScreenVariants}
             initial="hidden"
             animate="visible"
             exit="exit"
@@ -1638,7 +2185,9 @@ export function AutomationROIPage() {
             >
               <div className="space-y-12">
                 <div>
-                  <p className="mb-6 text-[12px] font-bold text-foreground">Columns: Task frequency</p>
+                  <p className="mb-6 text-[12px] font-bold text-foreground">
+                    <MenuOptionTypewriter text="Columns: Task frequency" startDelayMs={0} />
+                  </p>
                   <TerminalChoiceList
                     items={columnItems.map((item) =>
                       item.kind === 'new-column'
@@ -1653,6 +2202,7 @@ export function AutomationROIPage() {
                         : -1
                     }
                     selected={clampedCustomizeColumnSelectedIndex}
+                    delayOffsetMs={MENU_OPTION_STAGGER_MS}
                     onHover={(index) => {
                       setCustomizeSection('columns')
                       setCustomizeColumnCursorIndex(index)
@@ -1667,7 +2217,12 @@ export function AutomationROIPage() {
                 </div>
 
                 <div>
-                  <p className="mb-6 text-[12px] font-bold text-foreground">Rows: Time saved per task</p>
+                  <p className="mb-6 text-[12px] font-bold text-foreground">
+                    <MenuOptionTypewriter
+                      text="Rows: Time saved per task"
+                      startDelayMs={(columnItems.length + 2) * MENU_OPTION_STAGGER_MS}
+                    />
+                  </p>
                   <TerminalChoiceList
                     items={rowItems.map((item) =>
                       item.kind === 'new-row'
@@ -1680,6 +2235,7 @@ export function AutomationROIPage() {
                       customizeSection === 'rows' ? clampedCustomizeRowCursorIndex : -1
                     }
                     selected={clampedCustomizeRowSelectedIndex}
+                    delayOffsetMs={(columnItems.length + 3) * MENU_OPTION_STAGGER_MS}
                     onHover={(index) => {
                       setCustomizeSection('rows')
                       setCustomizeRowCursorIndex(index)
@@ -1696,20 +2252,60 @@ export function AutomationROIPage() {
 
               <div className="mt-12 pl-5 text-[12px] space-y-3">
                 {hasCustomizePendingChanges ? (
-                  <InlineAction label="Save changes" onClick={() => setView('table')} />
+                  <InlineAction
+                    label={
+                      <MenuOptionTypewriter
+                        text="Save changes"
+                        startDelayMs={
+                          (columnItems.length + rowItems.length + 5) * MENU_OPTION_STAGGER_MS
+                        }
+                      />
+                    }
+                    active={
+                      customizeSection === 'actions' &&
+                      customizeActionItems[clampedCustomizeActionCursorIndex] === 'save'
+                    }
+                    onMouseEnter={() => {
+                      setCustomizeSection('actions')
+                      setCustomizeActionCursorIndex(
+                        Math.max(0, customizeActionItems.indexOf('save')),
+                      )
+                    }}
+                    onClick={() => setView('table')}
+                  />
                 ) : null}
-                <InlineAction label="Cancel" onClick={() => setView('table')} />
+                <InlineAction
+                  label={
+                    <MenuOptionTypewriter
+                      text="Cancel"
+                      startDelayMs={
+                        (columnItems.length + rowItems.length + (hasCustomizePendingChanges ? 6 : 5)) *
+                        MENU_OPTION_STAGGER_MS
+                      }
+                    />
+                    }
+                  active={
+                    customizeSection === 'actions' &&
+                    customizeActionItems[clampedCustomizeActionCursorIndex] === 'cancel'
+                  }
+                  onMouseEnter={() => {
+                    setCustomizeSection('actions')
+                    setCustomizeActionCursorIndex(
+                      Math.max(0, customizeActionItems.indexOf('cancel')),
+                    )
+                  }}
+                  onClick={() => setView('table')}
+                />
               </div>
             </div>
 
-            <PageFooter themeLabel={terminalThemeLabel} onAction={handleFooterAction} />
           </motion.section>
         ) : null}
 
         {view === 'add-menu-option' ? (
           <motion.section
             key="add-menu-option"
-            variants={screenVariants}
+            variants={activeScreenVariants}
             initial="hidden"
             animate="visible"
             exit="exit"
@@ -1730,7 +2326,7 @@ export function AutomationROIPage() {
                   className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground"
                   htmlFor="menu-option-input"
                 >
-                  {menuCustomFieldLabel}
+                  <MenuOptionTypewriter text={menuCustomFieldLabel} startDelayMs={0} />
                   <span
                     className="inline-flex items-center"
                     onMouseDown={(event) => {
@@ -1767,7 +2363,12 @@ export function AutomationROIPage() {
                     onFocus={() => setAddMenuOptionCursorIndex(1)}
                   >
                     <InlineAction
-                      label="Cancel"
+                      label={
+                        <MenuOptionTypewriter
+                          text="Cancel"
+                          startDelayMs={MENU_OPTION_STAGGER_MS}
+                        />
+                      }
                       onClick={closeAddMenuOption}
                       active={addMenuOptionCursorIndex === 1}
                       buttonRef={addMenuOptionCancelRef}
@@ -1777,54 +2378,96 @@ export function AutomationROIPage() {
               </form>
 
               <div className="mt-10 text-[12px] leading-5 text-muted-foreground">
-                <p className="m-0 font-bold text-foreground">Examples</p>
+                <p className="m-0 font-bold text-foreground">
+                  <MenuOptionTypewriter text="Examples" startDelayMs={MENU_OPTION_STAGGER_MS * 2} />
+                </p>
                 {menuCustomKind === 'frequency' ? (
                   <>
-                    <p className="mt-2">50/day</p>
-                    <p>10 times per day</p>
-                    <p>Daily</p>
-                    <p>Biweekly</p>
-                    <p>2/y</p>
-                    <p>...</p>
-                    <p>etc</p>
+                    <p className="mt-2">
+                      <MenuOptionTypewriter text="50/day" startDelayMs={MENU_OPTION_STAGGER_MS * 3} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="10 times per day" startDelayMs={MENU_OPTION_STAGGER_MS * 4} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="Daily" startDelayMs={MENU_OPTION_STAGGER_MS * 5} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="Biweekly" startDelayMs={MENU_OPTION_STAGGER_MS * 6} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="2/y" startDelayMs={MENU_OPTION_STAGGER_MS * 7} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="..." startDelayMs={MENU_OPTION_STAGGER_MS * 8} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="etc" startDelayMs={MENU_OPTION_STAGGER_MS * 9} />
+                    </p>
                   </>
                 ) : null}
                 {menuCustomKind === 'time' ? (
                   <>
-                    <p className="mt-2">10s</p>
-                    <p>one minute</p>
-                    <p>5 min</p>
-                    <p>2h</p>
-                    <p>five m</p>
-                    <p>...</p>
-                    <p>etc</p>
+                    <p className="mt-2">
+                      <MenuOptionTypewriter text="10s" startDelayMs={MENU_OPTION_STAGGER_MS * 3} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="one minute" startDelayMs={MENU_OPTION_STAGGER_MS * 4} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="5 min" startDelayMs={MENU_OPTION_STAGGER_MS * 5} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="2h" startDelayMs={MENU_OPTION_STAGGER_MS * 6} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="five m" startDelayMs={MENU_OPTION_STAGGER_MS * 7} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="..." startDelayMs={MENU_OPTION_STAGGER_MS * 8} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="etc" startDelayMs={MENU_OPTION_STAGGER_MS * 9} />
+                    </p>
                   </>
                 ) : null}
                 {menuCustomKind === 'lifetime' ? (
                   <>
-                    <p className="mt-2">5 years</p>
-                    <p>18 months</p>
-                    <p>2.5 years</p>
-                    <p>6 mo</p>
-                    <p>...</p>
-                    <p>etc</p>
+                    <p className="mt-2">
+                      <MenuOptionTypewriter text="5 years" startDelayMs={MENU_OPTION_STAGGER_MS * 3} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="18 months" startDelayMs={MENU_OPTION_STAGGER_MS * 4} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="2.5 years" startDelayMs={MENU_OPTION_STAGGER_MS * 5} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="6 mo" startDelayMs={MENU_OPTION_STAGGER_MS * 6} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="..." startDelayMs={MENU_OPTION_STAGGER_MS * 7} />
+                    </p>
+                    <p>
+                      <MenuOptionTypewriter text="etc" startDelayMs={MENU_OPTION_STAGGER_MS * 8} />
+                    </p>
                   </>
                 ) : null}
               </div>
             </div>
 
-            <PageFooter themeLabel={terminalThemeLabel} onAction={handleFooterAction} />
           </motion.section>
         ) : null}
 
         {view === 'add-column' ? (
           <motion.section
             key="add-column"
-            variants={screenVariants}
+            variants={activeScreenVariants}
             initial="hidden"
             animate="visible"
             exit="exit"
             className="flex min-h-[calc(100vh-48px)] sm:min-h-[calc(100vh-96px)] w-full max-w-[1200px] flex-col"
+            onKeyDown={handleAddColumnKeyDown}
           >
             <TerminalHeader title={editingColumnId ? 'Edit table column' : 'Add table column'} />
 
@@ -1837,11 +2480,12 @@ export function AutomationROIPage() {
                 }}
               >
                 <label className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground" htmlFor="column-input">
-                  Task frequency:
+                  <MenuOptionTypewriter text="Task frequency:" startDelayMs={0} />
                   <span
                     className="inline-flex items-center"
                     onMouseDown={(event) => {
                       event.preventDefault()
+                      setAddColumnCursorIndex(0)
                       columnInputRef.current?.focus()
                     }}
                   >
@@ -1852,63 +2496,82 @@ export function AutomationROIPage() {
                       value={columnDraft}
                       onChange={(event) => setColumnDraft(event.target.value)}
                       className="w-0 border-0 bg-transparent p-0 text-[12px] font-bold text-foreground caret-transparent outline-none"
-                      style={{ width: `${columnDraft.length}ch` }}
+                      style={{ width: `${Math.max(1, columnDraft.length)}ch` }}
                       autoComplete="off"
                       spellCheck={false}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Escape') {
-                          event.preventDefault()
-                          setEditingColumnId(null)
-                          setColumnDraft('')
-                          setView('customize')
-                        }
-                      }}
+                      onFocus={() => setAddColumnCursorIndex(0)}
                     />
-                    <TerminalCursor />
+                    <TerminalCursor active={addColumnCursorIndex === 0} />
                   </span>
                 </label>
 
                 <div className="space-y-3">
                   <InlineAction
-                    label="Cancel"
-                    onClick={() => {
-                      setEditingColumnId(null)
-                      setColumnDraft('')
-                      setView('customize')
-                    }}
+                    label={<MenuOptionTypewriter text="Cancel" startDelayMs={MENU_OPTION_STAGGER_MS} />}
+                    onClick={closeAddColumn}
+                    active={addColumnCursorIndex === 1}
+                    buttonRef={addColumnCancelRef}
+                    onMouseEnter={() => setAddColumnCursorIndex(1)}
                   />
                   {editingColumnId ? (
                     <div>
-                      <InlineAction label="Delete column" onClick={deleteEditingColumn} />
+                      <InlineAction
+                        label={
+                          <MenuOptionTypewriter
+                            text="Delete column"
+                            startDelayMs={MENU_OPTION_STAGGER_MS * 2}
+                          />
+                        }
+                        onClick={deleteEditingColumn}
+                        active={addColumnCursorIndex === 2}
+                        buttonRef={addColumnDeleteRef}
+                        onMouseEnter={() => setAddColumnCursorIndex(2)}
+                      />
                     </div>
                   ) : null}
                 </div>
               </form>
 
               <div className="mt-10 text-[12px] leading-5 text-muted-foreground">
-                <p className="m-0 font-bold text-foreground">Examples</p>
-                <p className="mt-2">50/day</p>
-                <p>10 tasks per day</p>
-                <p>Daily</p>
-                <p>Biweekly</p>
-                <p>2/y</p>
-                <p>...</p>
-                <p>etc</p>
+                <p className="m-0 font-bold text-foreground">
+                  <MenuOptionTypewriter text="Examples" startDelayMs={MENU_OPTION_STAGGER_MS * 2} />
+                </p>
+                <p className="mt-2">
+                  <MenuOptionTypewriter text="50/day" startDelayMs={MENU_OPTION_STAGGER_MS * 3} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="10 tasks per day" startDelayMs={MENU_OPTION_STAGGER_MS * 4} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="Daily" startDelayMs={MENU_OPTION_STAGGER_MS * 5} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="Biweekly" startDelayMs={MENU_OPTION_STAGGER_MS * 6} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="2/y" startDelayMs={MENU_OPTION_STAGGER_MS * 7} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="..." startDelayMs={MENU_OPTION_STAGGER_MS * 8} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="etc" startDelayMs={MENU_OPTION_STAGGER_MS * 9} />
+                </p>
               </div>
             </div>
 
-            <PageFooter themeLabel={terminalThemeLabel} onAction={handleFooterAction} />
           </motion.section>
         ) : null}
 
         {view === 'add-row' ? (
           <motion.section
             key="add-row"
-            variants={screenVariants}
+            variants={activeScreenVariants}
             initial="hidden"
             animate="visible"
             exit="exit"
             className="flex min-h-[calc(100vh-48px)] sm:min-h-[calc(100vh-96px)] w-full max-w-[1200px] flex-col"
+            onKeyDown={handleAddRowKeyDown}
           >
             <TerminalHeader title={editingRowId ? 'Edit table row' : 'Add table row'} />
 
@@ -1921,11 +2584,12 @@ export function AutomationROIPage() {
                 }}
               >
                 <label className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground" htmlFor="row-input">
-                  Time saved per task:
+                  <MenuOptionTypewriter text="Time saved per task:" startDelayMs={0} />
                   <span
                     className="inline-flex items-center"
                     onMouseDown={(event) => {
                       event.preventDefault()
+                      setAddRowCursorIndex(0)
                       rowInputRef.current?.focus()
                     }}
                   >
@@ -1936,52 +2600,70 @@ export function AutomationROIPage() {
                       value={rowDraft}
                       onChange={(event) => setRowDraft(event.target.value)}
                       className="w-0 border-0 bg-transparent p-0 text-[12px] font-bold text-foreground caret-transparent outline-none"
-                      style={{ width: `${rowDraft.length}ch` }}
+                      style={{ width: `${Math.max(1, rowDraft.length)}ch` }}
                       autoComplete="off"
                       spellCheck={false}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Escape') {
-                          event.preventDefault()
-                          setEditingRowId(null)
-                          setRowDraft('')
-                          setView('customize')
-                        }
-                      }}
+                      onFocus={() => setAddRowCursorIndex(0)}
                     />
-                    <TerminalCursor />
+                    <TerminalCursor active={addRowCursorIndex === 0} />
                   </span>
                 </label>
 
                 <div className="space-y-3">
                   <InlineAction
-                    label="Cancel"
-                    onClick={() => {
-                      setEditingRowId(null)
-                      setRowDraft('')
-                      setView('customize')
-                    }}
+                    label={<MenuOptionTypewriter text="Cancel" startDelayMs={MENU_OPTION_STAGGER_MS} />}
+                    onClick={closeAddRow}
+                    active={addRowCursorIndex === 1}
+                    buttonRef={addRowCancelRef}
+                    onMouseEnter={() => setAddRowCursorIndex(1)}
                   />
                   {editingRowId ? (
                     <div>
-                      <InlineAction label="Delete row" onClick={deleteEditingRow} />
+                      <InlineAction
+                        label={
+                          <MenuOptionTypewriter
+                            text="Delete row"
+                            startDelayMs={MENU_OPTION_STAGGER_MS * 2}
+                          />
+                        }
+                        onClick={deleteEditingRow}
+                        active={addRowCursorIndex === 2}
+                        buttonRef={addRowDeleteRef}
+                        onMouseEnter={() => setAddRowCursorIndex(2)}
+                      />
                     </div>
                   ) : null}
                 </div>
               </form>
 
               <div className="mt-10 text-[12px] leading-5 text-muted-foreground">
-                <p className="m-0 font-bold text-foreground">Examples</p>
-                <p className="mt-2">10s</p>
-                <p>one minute</p>
-                <p>5 min</p>
-                <p>2h</p>
-                <p>five m</p>
-                <p>...</p>
-                <p>etc</p>
+                <p className="m-0 font-bold text-foreground">
+                  <MenuOptionTypewriter text="Examples" startDelayMs={MENU_OPTION_STAGGER_MS * 2} />
+                </p>
+                <p className="mt-2">
+                  <MenuOptionTypewriter text="10s" startDelayMs={MENU_OPTION_STAGGER_MS * 3} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="one minute" startDelayMs={MENU_OPTION_STAGGER_MS * 4} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="5 min" startDelayMs={MENU_OPTION_STAGGER_MS * 5} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="2h" startDelayMs={MENU_OPTION_STAGGER_MS * 6} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="five m" startDelayMs={MENU_OPTION_STAGGER_MS * 7} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="..." startDelayMs={MENU_OPTION_STAGGER_MS * 8} />
+                </p>
+                <p>
+                  <MenuOptionTypewriter text="etc" startDelayMs={MENU_OPTION_STAGGER_MS * 9} />
+                </p>
               </div>
             </div>
 
-            <PageFooter themeLabel={terminalThemeLabel} onAction={handleFooterAction} />
           </motion.section>
         ) : null}
       </AnimatePresence>
@@ -2017,9 +2699,15 @@ function TypewriterResultText({
   text: string
   onComplete: () => void
 }) {
+  const prefersReducedMotion = useReducedMotion()
   const [visibleLength, setVisibleLength] = useState(0)
 
   useEffect(() => {
+    if (prefersReducedMotion) {
+      onComplete()
+      return
+    }
+
     let timer = 0
     let cancelled = false
 
@@ -2049,9 +2737,64 @@ function TypewriterResultText({
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [text, onComplete])
+  }, [text, onComplete, prefersReducedMotion])
 
   return <span className="whitespace-nowrap">{text.slice(0, visibleLength)}</span>
+}
+
+function MenuOptionTypewriter({
+  text,
+  startDelayMs,
+  animateOnlyOnMount = false,
+}: {
+  text: string
+  startDelayMs: number
+  animateOnlyOnMount?: boolean
+}) {
+  const prefersReducedMotion = useReducedMotion()
+  const [visibleLength, setVisibleLength] = useState(0)
+  const [hasAnimatedOnMount, setHasAnimatedOnMount] = useState(false)
+  const shouldAnimate =
+    !prefersReducedMotion && (!animateOnlyOnMount || !hasAnimatedOnMount)
+
+  useEffect(() => {
+    if (!shouldAnimate) {
+      return
+    }
+
+    let timer = 0
+    let cancelled = false
+
+    const step = (index: number) => {
+      if (cancelled) {
+        return
+      }
+
+      setVisibleLength(index)
+
+      if (index >= text.length) {
+        if (animateOnlyOnMount) {
+          setHasAnimatedOnMount(true)
+        }
+        return
+      }
+
+      timer = window.setTimeout(() => step(index + 1), MENU_OPTION_CHAR_MS)
+    }
+
+    timer = window.setTimeout(() => step(1), startDelayMs)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [animateOnlyOnMount, shouldAnimate, startDelayMs, text])
+
+  if (!shouldAnimate) {
+    return <span>{text}</span>
+  }
+
+  return <span>{text.slice(0, visibleLength)}</span>
 }
 
 function RowCells({
@@ -2091,7 +2834,7 @@ function RowCells({
             <div
               key={`${row.id}-${column.id}`}
               className={cn(
-                'flex h-6 items-center justify-center bg-[repeating-linear-gradient(-45deg,#ececec,#ececec_2px,#f5f5f5_2px,#f5f5f5_4px)] dark:bg-[repeating-linear-gradient(-45deg,#181818,#181818_2px,#1f1f1f_2px,#1f1f1f_4px)]',
+                'flex h-6 items-center justify-center bg-hatch',
                 borderClass,
               )}
             />
@@ -2151,12 +2894,14 @@ function TerminalChoiceList({
   items,
   active,
   selected,
+  delayOffsetMs = 0,
   onHover,
   onActivate,
 }: {
   items: string[]
   active: number
   selected: number
+  delayOffsetMs?: number
   onHover: (index: number) => void
   onActivate: (index: number) => void
 }) {
@@ -2174,16 +2919,19 @@ function TerminalChoiceList({
             type="button"
             className={cn(
               'block cursor-pointer text-left leading-6 outline-none transition-colors',
-              index === selected
+              index === active
                 ? 'font-bold text-foreground'
-                : index === active
-                  ? 'font-medium text-foreground'
-                  : 'font-medium text-muted-foreground hover:text-foreground',
+                : index === selected
+                ? 'font-bold text-foreground'
+                : 'font-medium text-muted-foreground hover:text-foreground',
             )}
             onMouseEnter={() => onHover(index)}
             onClick={() => onActivate(index)}
           >
-            {item}
+            <MenuOptionTypewriter
+              text={item}
+              startDelayMs={delayOffsetMs + index * MENU_OPTION_STAGGER_MS}
+            />
           </button>
         ))}
       </div>
@@ -2192,7 +2940,12 @@ function TerminalChoiceList({
 }
 
 function TypedWords({ text, delaySteps = 0 }: { text: string; delaySteps?: number }) {
+  const prefersReducedMotion = useReducedMotion()
   const tokens = text.split(/(\s+)/).filter(Boolean)
+
+  if (prefersReducedMotion) {
+    return <span>{text}</span>
+  }
 
   return (
     <span>
@@ -2233,6 +2986,12 @@ function TypedInlineSlot({
   delaySteps: number
   children: ReactNode
 }) {
+  const prefersReducedMotion = useReducedMotion()
+
+  if (prefersReducedMotion) {
+    return <span className="inline-flex">{children}</span>
+  }
+
   return (
     <motion.span
       initial={{ opacity: 0, y: 3 }}
@@ -2259,8 +3018,10 @@ function InlineAction({
   underlineTight = false,
   className,
   buttonRef,
+  onMouseEnter,
+  onFocus,
 }: {
-  label: string
+  label: ReactNode
   onClick: () => void
   active?: boolean
   disabled?: boolean
@@ -2270,18 +3031,24 @@ function InlineAction({
   underlineTight?: boolean
   className?: string
   buttonRef?: Ref<HTMLButtonElement>
+  onMouseEnter?: () => void
+  onFocus?: () => void
 }) {
   return (
     <button
       ref={buttonRef}
       type="button"
       onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onFocus={onFocus}
       disabled={disabled}
       className={cn(
         interactiveBaseClass,
+        'group',
         cursorOutside ? 'pr-0' : 'pr-[12px]',
-        underlineTight && 'pb-0 before:bottom-[1px] after:bottom-[1px]',
-        active && 'after:origin-left after:scale-x-100',
+        underlineTight && 'pb-0 before:bottom-px after:bottom-px',
+        active &&
+          'motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100',
         variant === 'strong' || active
           ? 'font-bold text-foreground'
           : 'font-medium text-muted-foreground hover:text-foreground',
@@ -2300,6 +3067,19 @@ function InlineAction({
         )}
       />
     </button>
+  )
+}
+
+function InlineSelectTriggerLabel({
+  text,
+}: {
+  text: string
+}) {
+  return (
+    <>
+      <span>{text}</span>
+      <span className="ml-[0.65ch] text-foreground">⏷</span>
+    </>
   )
 }
 
@@ -2324,7 +3104,7 @@ function TerminalCursor({
 
 function TerminalHeader({ title }: { title: string }) {
   return (
-    <header className="mb-12">
+    <header className="mb-12 w-full max-w-[640px]">
       <h1 className="m-0 text-[12px] font-bold leading-none text-foreground">{title}</h1>
     </header>
   )
@@ -2434,6 +3214,59 @@ function formatResultNumber(value: number) {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value)
 }
 
+function formatFocusApproxText(result: CompactCellDisplay, basis: CalendarBasis) {
+  const prefix = result.approx ? '~' : ''
+  const numeric = formatResultNumber(result.value)
+
+  if (basis !== 'workdays') {
+    return `${prefix}${numeric} ${result.unit}`
+  }
+
+  const lowerUnit = result.unit.toLowerCase()
+
+  if (lowerUnit === 'day' || lowerUnit === 'days') {
+    const label = Math.abs(result.value) === 1 ? 'workday' : 'workdays'
+    return `${prefix}${numeric} ${label}`
+  }
+
+  if (lowerUnit === 'week' || lowerUnit === 'weeks') {
+    const label = Math.abs(result.value) === 1 ? 'workweek' : 'workweeks'
+    return `${prefix}${numeric} ${label}`
+  }
+
+  const fullUnit = expandApproxUnit(result.unit, result.value)
+  return `${prefix}${numeric} ${fullUnit}`
+}
+
+function expandApproxUnit(unit: string, value: number) {
+  const singular = Math.abs(value) === 1
+  const key = unit.toLowerCase()
+
+  if (key === 'sec' || key === 'second' || key === 'seconds') {
+    return singular ? 'second' : 'seconds'
+  }
+  if (key === 'min' || key === 'minute' || key === 'minutes') {
+    return singular ? 'minute' : 'minutes'
+  }
+  if (key === 'hr' || key === 'hrs' || key === 'hour' || key === 'hours') {
+    return singular ? 'hour' : 'hours'
+  }
+  if (key === 'day' || key === 'days') {
+    return singular ? 'day' : 'days'
+  }
+  if (key === 'week' || key === 'weeks') {
+    return singular ? 'week' : 'weeks'
+  }
+  if (key === 'mo' || key === 'month' || key === 'months') {
+    return singular ? 'month' : 'months'
+  }
+  if (key === 'yr' || key === 'yrs' || key === 'year' || key === 'years') {
+    return singular ? 'year' : 'years'
+  }
+
+  return unit
+}
+
 function getFlowStepCount(text: string) {
   return text.split(/(\s+)/).filter((token) => token && !/^\s+$/.test(token)).length
 }
@@ -2450,6 +3283,30 @@ function clampIndex(index: number, length: number) {
   return Math.max(0, Math.min(index, length - 1))
 }
 
+function remapTableCursorIndexForResetSlot(
+  index: number,
+  hadResetSlot: boolean,
+  hasResetSlot: boolean,
+) {
+  if (hadResetSlot === hasResetSlot) {
+    return index
+  }
+
+  if (!hadResetSlot && hasResetSlot) {
+    return index === 0 ? 0 : index + 1
+  }
+
+  if (index === 0) {
+    return 0
+  }
+
+  if (index === 1) {
+    return 1
+  }
+
+  return index - 1
+}
+
 function valuesNearlyEqual(a: number, b: number) {
   return Math.abs(a - b) < 0.0001
 }
@@ -2462,6 +3319,7 @@ function isDefaultState(state: {
   columns: (typeof DEFAULT_STATE)['columns']
   displayMode: (typeof DEFAULT_STATE)['displayMode']
   significantDigits: number
+  autoHideKeyCommands: boolean
 }) {
   return (
     state.lifetimeYears === DEFAULT_STATE.lifetimeYears &&
@@ -2469,6 +3327,7 @@ function isDefaultState(state: {
     state.customDaysPerYear === DEFAULT_STATE.customDaysPerYear &&
     state.displayMode === DEFAULT_STATE.displayMode &&
     state.significantDigits === DEFAULT_STATE.significantDigits &&
+    state.autoHideKeyCommands === DEFAULT_STATE.autoHideKeyCommands &&
     sameRows(state.rows, DEFAULT_STATE.rows) &&
     sameColumns(state.columns, DEFAULT_STATE.columns)
   )

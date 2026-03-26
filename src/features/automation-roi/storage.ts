@@ -16,7 +16,7 @@ export function loadPersistedState(): PersistedAutomationROIState {
       return copyDefaults()
     }
 
-    const parsed = JSON.parse(raw) as unknown
+    const parsed = migratePersistedState(JSON.parse(raw) as unknown)
     const result = persistedStateSchema.safeParse(parsed)
 
     if (!result.success) {
@@ -66,4 +66,25 @@ function normalizeState(state: PersistedAutomationROIState): PersistedAutomation
     rows,
     columns,
   }
+}
+
+function migratePersistedState(raw: unknown): unknown {
+  if (!isRecord(raw)) {
+    return raw
+  }
+
+  const migrated = { ...raw }
+  if (
+    !('autoHideKeyCommands' in migrated) &&
+    'showKeyboardCommands' in migrated &&
+    typeof migrated.showKeyboardCommands === 'boolean'
+  ) {
+    migrated.autoHideKeyCommands = migrated.showKeyboardCommands
+  }
+
+  return migrated
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }

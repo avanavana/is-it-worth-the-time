@@ -10,7 +10,7 @@ import type { CalendarBasis, CellDetails, FrequencyColumn, SavingsRow } from './
 
 export function getDaysPerYear(basis: CalendarBasis, customDaysPerYear: number) {
   if (basis === 'workdays') {
-    return 250
+    return 260
   }
 
   if (basis === 'custom') {

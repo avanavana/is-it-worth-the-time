@@ -25,4 +25,5 @@ export const persistedStateSchema = z.object({
   columns: z.array(columnSchema).min(MIN_COLUMNS).max(MAX_COLUMNS),
   displayMode: z.enum(['humanized', 'exact']),
   significantDigits: z.number().int().min(2).max(8),
+  autoHideKeyCommands: z.boolean().default(true),
 })

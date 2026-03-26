@@ -20,6 +20,7 @@ interface AutomationROIState extends PersistedAutomationROIState {
   setCalendarBasis: (value: CalendarBasis) => void
   setCustomDaysPerYear: (value: number) => void
   setDisplayMode: (value: DisplayMode) => void
+  setAutoHideKeyCommands: (value: boolean) => void
   setSignificantDigits: (value: number) => void
   addCustomRow: (payload: Omit<SavingsRow, 'id' | 'isCustom'>) => void
   updateCustomRow: (id: string, payload: Omit<SavingsRow, 'id' | 'isCustom'>) => void
@@ -49,6 +50,8 @@ export const useAutomationROIStore = create<AutomationROIState>((set, get) => ({
   setCustomDaysPerYear: (value) => set({ customDaysPerYear: clamp(value, 1, 366) }),
 
   setDisplayMode: (value) => set({ displayMode: value }),
+
+  setAutoHideKeyCommands: (value) => set({ autoHideKeyCommands: value }),
 
   setSignificantDigits: (value) => set({ significantDigits: clamp(value, 2, 8) }),
 
@@ -170,6 +173,7 @@ export const useAutomationROIStore = create<AutomationROIState>((set, get) => ({
       columns: state.columns,
       displayMode: state.displayMode,
       significantDigits: state.significantDigits,
+      autoHideKeyCommands: state.autoHideKeyCommands,
     }
   },
 }))
