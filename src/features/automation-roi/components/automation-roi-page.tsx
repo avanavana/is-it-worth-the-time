@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type Ref,
   type ReactNode,
@@ -12,6 +13,7 @@ import {
 import NumberFlow from '@number-flow/react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTheme } from 'next-themes'
+import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 
 import { PageFooter } from '@/components/layout/page-footer'
@@ -26,7 +28,13 @@ import {
   isImpossibleCell,
 } from '../calculations'
 import { DEFAULT_COLUMNS, DEFAULT_ROWS, DEFAULT_STATE, LIFETIME_PRESETS_YEARS } from '../defaults'
-import { formatCompactCellDisplay, formatForTable, formatPreciseLongText } from '../formatters'
+import {
+  formatCompactCellDisplay,
+  formatForTable,
+  formatNonApproximateCellTooltipText,
+  formatPreciseTooltipText,
+  formatPreciseLongText,
+} from '../formatters'
 import type { CompactCellDisplay } from '../formatters'
 import { useAutomationROIStore } from '../hooks/use-automation-roi-store'
 import { parseDurationInput, parseFrequencyInput, parseTimeSavedInput } from '../parsers'
@@ -40,14 +48,23 @@ type View =
   | 'menu-frequency'
   | 'menu-time'
   | 'menu-lifetime'
+  | 'menu-edit-columns'
+  | 'menu-edit-rows'
   | 'add-menu-option'
-  | 'customize'
   | 'add-column'
   | 'add-row'
 
 type BaseView = 'home' | 'table'
-type CustomizeSection = 'columns' | 'rows' | 'actions'
 type MenuCustomKind = 'frequency' | 'time' | 'lifetime'
+type TableEditMenuKind = 'columns' | 'rows'
+type NonSettingsView = Exclude<View, 'settings'>
+type NavigationUrlState = {
+  view: View
+  menuReturnView: BaseView
+  settingsReturnView: NonSettingsView
+  tableEditMenuKind: TableEditMenuKind
+  menuCustomKind: MenuCustomKind
+}
 
 interface FrequencyOption {
   label: string
@@ -65,8 +82,16 @@ interface SettingsOption {
   value?: string
 }
 
+type TableEditMenuItem =
+  | { kind: 'default-row'; row: SavingsRow }
+  | { kind: 'default-column'; column: FrequencyColumn }
+  | { kind: 'custom-row'; row: SavingsRow }
+  | { kind: 'custom-column'; column: FrequencyColumn }
+  | { kind: 'new' }
+  | { kind: 'cancel' }
+
 const HOME_CURSOR_RESULT_INDEX = 3
-const FOOTER_ACTION_COUNT = 4
+const FOOTER_LINK_COUNT = 4
 
 const frequencyOptions: FrequencyOption[] = [
   { label: '50 times a day', value: { ...DEFAULT_COLUMNS[0] } },
@@ -112,9 +137,24 @@ const MENU_OPTION_STAGGER_MS = 85
 const MENU_OPTION_CHAR_MS = 14
 const HOME_REVEAL_STAGE_RESULT = 1
 const HOME_REVEAL_STAGE_SHOW_TABLE = 2
-const HOME_REVEAL_STAGE_RESET = 3
-const HOME_REVEAL_STAGE_NOTE = 4
-const HOME_REVEAL_STAGE_FOOTER_START = 5
+const HOME_REVEAL_STAGE_KEY_COMMANDS = 3
+const HOME_REVEAL_STAGE_FOOTER_START = 4
+const HOME_RESULT_TYPEWRITER_DURATION_MS = 260
+const HOME_SHOW_TABLE_TYPEWRITER_DURATION_MS = 280
+const HOME_KEY_COMMANDS_TO_FOOTER_DELAY_MS = 760
+const HOME_KEY_COMMANDS_LINK_TO_FOOTER_DELAY_MS = 220
+const HOME_SHOW_TABLE_LABEL = 'Show full table 🡪'
+const TABLE_LAYOUT_BREAKPOINT_PX = 736
+const TABLE_SCROLL_STEP_PX = 99
+const TABLE_SCROLL_EPSILON_PX = 0.25
+const TABLE_TOOLTIP_SHOW_DELAY_MS = 500
+const TABLE_TOOLTIP_OFFSET_X = 8
+const TABLE_TOOLTIP_OFFSET_Y = 8
+const MENU_CURSOR_REVEAL_DELAY_MS = 90
+const MENU_ID_FREQUENCY = 'frequency'
+const MENU_ID_SAVINGS = 'savings'
+const MENU_ID_PERIOD = 'period'
+const NAVIGATION_HISTORY_STATE_KEY = 'iitwtNavIndex'
 
 export function AutomationROIPage() {
   const {
@@ -131,11 +171,11 @@ export function AutomationROIPage() {
     setDisplayMode,
     setAutoHideKeyCommands,
     addCustomRow,
-    updateCustomRow,
     deleteCustomRow,
+    toggleDefaultRow,
     addCustomColumn,
-    updateCustomColumn,
     deleteCustomColumn,
+    toggleDefaultColumn,
     resetDefaults,
   } = useAutomationROIStore()
 
@@ -151,13 +191,25 @@ export function AutomationROIPage() {
         animate: { opacity: 1, y: 0 },
         transition: { duration: 0.2 },
       }
+  const [initialNavigationState] = useState<NavigationUrlState>(() =>
+    parseNavigationStateFromPath(
+      typeof window === 'undefined' ? '/' : window.location.pathname,
+    ),
+  )
 
-  const [view, setView] = useState<View>('home')
-  const [settingsReturnView, setSettingsReturnView] = useState<Exclude<View, 'settings'>>('home')
+  const [view, setView] = useState<View>(initialNavigationState.view)
+  const [settingsReturnView, setSettingsReturnView] = useState<NonSettingsView>(
+    initialNavigationState.settingsReturnView,
+  )
   const [settingsIndex, setSettingsIndex] = useState(0)
-  const [menuReturnView, setMenuReturnView] = useState<BaseView>('home')
+  const [menuReturnView, setMenuReturnView] = useState<BaseView>(
+    initialNavigationState.menuReturnView,
+  )
   const [menuIndex, setMenuIndex] = useState(0)
-  const [menuCustomKind, setMenuCustomKind] = useState<MenuCustomKind>('frequency')
+  const [menuCursorVisible, setMenuCursorVisible] = useState(false)
+  const [menuCustomKind, setMenuCustomKind] = useState<MenuCustomKind>(
+    initialNavigationState.menuCustomKind,
+  )
   const [menuCustomDraft, setMenuCustomDraft] = useState('')
 
   const [focusFrequency, setFocusFrequency] = useState(() => ({ ...DEFAULT_FOCUS_FREQUENCY }))
@@ -169,24 +221,32 @@ export function AutomationROIPage() {
   const [resultTypewriterDone, setResultTypewriterDone] = useState(false)
   const [homeRevealStage, setHomeRevealStage] = useState(0)
   const [tableCursorIndex, setTableCursorIndex] = useState(1)
+  const [homeFooterCommandToggleAvailable, setHomeFooterCommandToggleAvailable] = useState(false)
+  const [tableFooterCommandToggleAvailable, setTableFooterCommandToggleAvailable] = useState(false)
+  const autoHideKeyCommandsRef = useRef(autoHideKeyCommands)
   const previousHasResettableChangesRef = useRef<boolean | null>(null)
+  const previousHomeFooterCommandToggleAvailableRef = useRef(false)
+  const previousTableFooterCommandToggleAvailableRef = useRef(false)
+  const hasInitializedUrlHistoryRef = useRef(false)
+  const isApplyingHistoryNavigationRef = useRef(false)
+  const lastNavigationPathRef = useRef('')
+  const navigationHistoryIndexRef = useRef(0)
 
-  const [customizeSection, setCustomizeSection] = useState<CustomizeSection>('columns')
-  const [customizeColumnCursorIndex, setCustomizeColumnCursorIndex] = useState(0)
-  const [customizeRowCursorIndex, setCustomizeRowCursorIndex] = useState(0)
-  const [customizeActionCursorIndex, setCustomizeActionCursorIndex] = useState(0)
-  const [customizeColumnSelectedIndex, setCustomizeColumnSelectedIndex] = useState(0)
-  const [customizeRowSelectedIndex, setCustomizeRowSelectedIndex] = useState(0)
-  const [customizeBaseline, setCustomizeBaseline] = useState<{
-    rows: SavingsRow[]
-    columns: FrequencyColumn[]
-  } | null>(null)
-
-  const [editingColumnId, setEditingColumnId] = useState<string | null>(null)
-  const [editingRowId, setEditingRowId] = useState<string | null>(null)
   const [addColumnCursorIndex, setAddColumnCursorIndex] = useState(0)
   const [addRowCursorIndex, setAddRowCursorIndex] = useState(0)
   const [addMenuOptionCursorIndex, setAddMenuOptionCursorIndex] = useState(0)
+  const [tableEditMenuIndex, setTableEditMenuIndex] = useState(0)
+  const [tableEditMenuCursorVisible, setTableEditMenuCursorVisible] = useState(false)
+  const [tableEditMenuKind, setTableEditMenuKind] = useState<TableEditMenuKind>(
+    initialNavigationState.tableEditMenuKind,
+  )
+  const [tableEditMenuHasInteracted, setTableEditMenuHasInteracted] = useState<{
+    rows: boolean
+    columns: boolean
+  }>({
+    rows: false,
+    columns: false,
+  })
   const [columnDraft, setColumnDraft] = useState('')
   const [rowDraft, setRowDraft] = useState('')
   const menuOptionInputRef = useRef<HTMLInputElement | null>(null)
@@ -194,10 +254,31 @@ export function AutomationROIPage() {
   const columnInputRef = useRef<HTMLInputElement | null>(null)
   const rowInputRef = useRef<HTMLInputElement | null>(null)
   const addColumnCancelRef = useRef<HTMLButtonElement | null>(null)
-  const addColumnDeleteRef = useRef<HTMLButtonElement | null>(null)
   const addRowCancelRef = useRef<HTMLButtonElement | null>(null)
-  const addRowDeleteRef = useRef<HTMLButtonElement | null>(null)
   const tableSliderTrackRef = useRef<HTMLDivElement | null>(null)
+  const tableScrollViewportRef = useRef<HTMLDivElement | null>(null)
+  const [isTableNarrow, setIsTableNarrow] = useState(() =>
+    typeof window === 'undefined'
+      ? false
+      : window.matchMedia(`(max-width: ${TABLE_LAYOUT_BREAKPOINT_PX - 1}px)`).matches,
+  )
+  const [tableCanScrollLeft, setTableCanScrollLeft] = useState(false)
+  const [tableCanScrollRight, setTableCanScrollRight] = useState(false)
+  const [tableArrowPressed, setTableArrowPressed] = useState({ left: false, right: false })
+  const [tableTooltip, setTableTooltip] = useState<{
+    key: string
+    text: string
+    x: number
+    y: number
+  } | null>(null)
+  const tableTooltipDelayRef = useRef<number | null>(null)
+  const hoveredApproxCellRef = useRef<string | null>(null)
+  const pendingTableTooltipRef = useRef<{
+    key: string
+    text: string
+    x: number
+    y: number
+  } | null>(null)
 
   const runsPerYear = getRunsPerYear(focusFrequency, calendarBasis, customDaysPerYear)
   const focusResultSeconds = calculateBreakEvenSeconds(focusTimeSavedSeconds, runsPerYear, lifetimeYears)
@@ -225,7 +306,6 @@ export function AutomationROIPage() {
         columns,
         displayMode,
         significantDigits,
-        autoHideKeyCommands,
       }),
     [
       lifetimeYears,
@@ -235,7 +315,6 @@ export function AutomationROIPage() {
       columns,
       displayMode,
       significantDigits,
-      autoHideKeyCommands,
     ],
   )
   const hasFocusOverrides =
@@ -263,14 +342,11 @@ export function AutomationROIPage() {
 
   const homeContentCursorMaxIndex = hasResettableChanges ? 5 : 4
   const homeFooterStartIndex = homeContentCursorMaxIndex + 1
-  const homeCursorMaxIndex = homeFooterStartIndex + FOOTER_ACTION_COUNT - 1
-  const homeFooterRevealCount = Math.max(
-    0,
-    Math.min(
-      FOOTER_ACTION_COUNT,
-      homeRevealStage - HOME_REVEAL_STAGE_FOOTER_START + 1,
-    ),
-  )
+  const homeFooterRevealCount =
+    homeRevealStage >= HOME_REVEAL_STAGE_FOOTER_START ? FOOTER_LINK_COUNT : 0
+  const homeFooterInteractiveCount =
+    homeFooterRevealCount + (homeFooterCommandToggleAvailable ? 1 : 0)
+  const homeCursorMaxIndex = homeContentCursorMaxIndex + homeFooterInteractiveCount
   let homeVisibleCursorMaxIndex = 2
   if (homeRevealStage >= HOME_REVEAL_STAGE_RESULT) {
     homeVisibleCursorMaxIndex = HOME_CURSOR_RESULT_INDEX
@@ -278,13 +354,13 @@ export function AutomationROIPage() {
   if (homeRevealStage >= HOME_REVEAL_STAGE_SHOW_TABLE) {
     homeVisibleCursorMaxIndex = Math.max(homeVisibleCursorMaxIndex, 4)
   }
-  if (hasResettableChanges && homeRevealStage >= HOME_REVEAL_STAGE_RESET) {
+  if (hasResettableChanges && homeRevealStage >= HOME_REVEAL_STAGE_SHOW_TABLE) {
     homeVisibleCursorMaxIndex = Math.max(homeVisibleCursorMaxIndex, 5)
   }
-  if (homeFooterRevealCount > 0) {
+  if (homeFooterInteractiveCount > 0) {
     homeVisibleCursorMaxIndex = Math.max(
       homeVisibleCursorMaxIndex,
-      homeFooterStartIndex + homeFooterRevealCount - 1,
+      homeFooterStartIndex + homeFooterInteractiveCount - 1,
     )
   }
   const activeHomeCursorIndex = Math.min(homeCursorIndex, homeVisibleCursorMaxIndex)
@@ -293,13 +369,90 @@ export function AutomationROIPage() {
   const tableSliderIndicatorCursorIndex = hasResettableChanges ? 3 : 2
   const tableDecrementCursorIndex = hasResettableChanges ? 4 : 3
   const tableIncrementCursorIndex = hasResettableChanges ? 5 : 4
-  const tableCustomizeCursorIndex = hasResettableChanges ? 6 : 5
-  const tableFooterStartIndex = tableCustomizeCursorIndex + 1
-  const tableCursorMaxIndex = tableFooterStartIndex + FOOTER_ACTION_COUNT - 1
+  const tableScrollCursorIndex = isTableNarrow ? (hasResettableChanges ? 6 : 5) : -1
+  const tableRowsEditCursorIndex = isTableNarrow
+    ? hasResettableChanges
+      ? 7
+      : 6
+    : hasResettableChanges
+      ? 6
+      : 5
+  const tableColumnsEditCursorIndex = tableRowsEditCursorIndex + 1
+  const tableFooterStartIndex = tableColumnsEditCursorIndex + 1
+  const tableFooterInteractiveCount =
+    FOOTER_LINK_COUNT + (tableFooterCommandToggleAvailable ? 1 : 0)
+  const tableCursorMaxIndex = tableFooterStartIndex + tableFooterInteractiveCount - 1
   const activeTableCursorIndex = Math.min(tableCursorIndex, tableCursorMaxIndex)
+
+  useEffect(() => {
+    const previous = previousHomeFooterCommandToggleAvailableRef.current
+    if (previous === homeFooterCommandToggleAvailable) {
+      return
+    }
+
+    previousHomeFooterCommandToggleAvailableRef.current = homeFooterCommandToggleAvailable
+    const remapTimeout = window.setTimeout(() => {
+      setHomeCursorIndex((current) => {
+        const firstLinkIndex = homeFooterStartIndex + (homeFooterCommandToggleAvailable ? 1 : 0)
+        const lastLinkIndex = firstLinkIndex + Math.max(0, homeFooterRevealCount - 1)
+
+        if (!previous && homeFooterCommandToggleAvailable) {
+          if (current >= homeFooterStartIndex && current <= lastLinkIndex - 1) {
+            return current + 1
+          }
+          return current
+        }
+
+        if (previous && !homeFooterCommandToggleAvailable) {
+          if (current > homeFooterStartIndex && current <= lastLinkIndex) {
+            return current - 1
+          }
+        }
+
+        return current
+      })
+    }, 0)
+    return () => {
+      window.clearTimeout(remapTimeout)
+    }
+  }, [homeFooterCommandToggleAvailable, homeFooterRevealCount, homeFooterStartIndex])
+
+  useEffect(() => {
+    const previous = previousTableFooterCommandToggleAvailableRef.current
+    if (previous === tableFooterCommandToggleAvailable) {
+      return
+    }
+
+    previousTableFooterCommandToggleAvailableRef.current = tableFooterCommandToggleAvailable
+    const remapTimeout = window.setTimeout(() => {
+      setTableCursorIndex((current) => {
+        const firstLinkIndex = tableFooterStartIndex + (tableFooterCommandToggleAvailable ? 1 : 0)
+        const lastLinkIndex = firstLinkIndex + FOOTER_LINK_COUNT - 1
+
+        if (!previous && tableFooterCommandToggleAvailable) {
+          if (current >= tableFooterStartIndex && current <= lastLinkIndex - 1) {
+            return current + 1
+          }
+          return current
+        }
+
+        if (previous && !tableFooterCommandToggleAvailable) {
+          if (current > tableFooterStartIndex && current <= lastLinkIndex) {
+            return current - 1
+          }
+        }
+
+        return current
+      })
+    }, 0)
+    return () => {
+      window.clearTimeout(remapTimeout)
+    }
+  }, [tableFooterCommandToggleAvailable, tableFooterStartIndex])
 
   const isMenuView =
     view === 'menu-frequency' || view === 'menu-time' || view === 'menu-lifetime'
+  const isTableEditMenuView = view === 'menu-edit-columns' || view === 'menu-edit-rows'
   const isSettingsView = view === 'settings'
 
   const menuTitle =
@@ -341,6 +494,113 @@ export function AutomationROIPage() {
             return index >= 0 ? index : menuNewOptionIndex
           })()
   const menuCursorMaxIndex = menuItemCount - 1
+  const activeTableEditMenuKind =
+    view === 'menu-edit-rows' || tableEditMenuKind === 'rows' ? 'rows' : 'columns'
+  const tableEditMenuTitle =
+    activeTableEditMenuKind === 'rows' ? 'Edit table rows' : 'Edit table columns'
+  const enabledDefaultRowIds = useMemo(
+    () => new Set(rows.filter((row) => !row.isCustom).map((row) => row.id)),
+    [rows],
+  )
+  const enabledDefaultColumnIds = useMemo(
+    () => new Set(columns.filter((column) => !column.isCustom).map((column) => column.id)),
+    [columns],
+  )
+  const customRows = useMemo(() => rows.filter((row) => row.isCustom), [rows])
+  const customColumns = useMemo(() => columns.filter((column) => column.isCustom), [columns])
+  const tableEditMenuItems = useMemo<TableEditMenuItem[]>(() => {
+    if (activeTableEditMenuKind === 'rows') {
+      return [
+        ...DEFAULT_ROWS.map((row) => ({ kind: 'default-row' as const, row })),
+        ...customRows.map((row) => ({ kind: 'custom-row' as const, row })),
+        { kind: 'new' as const },
+        { kind: 'cancel' as const },
+      ]
+    }
+
+    return [
+      ...DEFAULT_COLUMNS.map((column) => ({ kind: 'default-column' as const, column })),
+      ...customColumns.map((column) => ({ kind: 'custom-column' as const, column })),
+      { kind: 'new' as const },
+      { kind: 'cancel' as const },
+    ]
+  }, [activeTableEditMenuKind, customColumns, customRows])
+  const tableEditMenuCursorMaxIndex = Math.max(0, tableEditMenuItems.length - 1)
+  const tableEditDefaultItemCount =
+    activeTableEditMenuKind === 'rows' ? DEFAULT_ROWS.length : DEFAULT_COLUMNS.length
+  const tableEditMenuNewLabel =
+    activeTableEditMenuKind === 'rows' ? 'New row…' : 'New column…'
+  const activeTableEditMenuHasInteracted =
+    activeTableEditMenuKind === 'rows'
+      ? tableEditMenuHasInteracted.rows
+      : tableEditMenuHasInteracted.columns
+  const tableEditMenuExitLabel =
+    activeTableEditMenuHasInteracted ? 'Back' : 'Cancel'
+
+  useEffect(() => {
+    if (!isMenuView) {
+      return
+    }
+
+    if (prefersReducedMotion) {
+      const showMenuCursorImmediatelyTimeout = window.setTimeout(() => {
+        setMenuCursorVisible(true)
+      }, 0)
+      return () => {
+        window.clearTimeout(showMenuCursorImmediatelyTimeout)
+      }
+    }
+
+    const revealMenuCursorTimeout = window.setTimeout(() => {
+      setMenuCursorVisible(true)
+    }, MENU_CURSOR_REVEAL_DELAY_MS)
+
+    return () => {
+      window.clearTimeout(revealMenuCursorTimeout)
+    }
+  }, [isMenuView, prefersReducedMotion, view])
+
+  useEffect(() => {
+    if (!isTableEditMenuView) {
+      return
+    }
+
+    if (prefersReducedMotion) {
+      const showTableEditMenuCursorTimeout = window.setTimeout(() => {
+        setTableEditMenuCursorVisible(true)
+      }, 0)
+      return () => {
+        window.clearTimeout(showTableEditMenuCursorTimeout)
+      }
+    }
+
+    const revealTableEditMenuCursorTimeout = window.setTimeout(() => {
+      setTableEditMenuCursorVisible(true)
+    }, MENU_CURSOR_REVEAL_DELAY_MS)
+
+    return () => {
+      window.clearTimeout(revealTableEditMenuCursorTimeout)
+    }
+  }, [isTableEditMenuView, prefersReducedMotion, view])
+
+  useEffect(() => {
+    if (!isTableEditMenuView) {
+      return
+    }
+
+    const clamped = clampIndex(tableEditMenuIndex, tableEditMenuItems.length)
+    if (clamped === tableEditMenuIndex) {
+      return
+    }
+
+    const clampTableEditMenuCursorTimeout = window.setTimeout(() => {
+      setTableEditMenuIndex(clamped)
+    }, 0)
+
+    return () => {
+      window.clearTimeout(clampTableEditMenuCursorTimeout)
+    }
+  }, [isTableEditMenuView, tableEditMenuIndex, tableEditMenuItems.length])
 
   const daysPerYear = getDaysPerYear(calendarBasis, customDaysPerYear)
   const hasCustomCalendar = calendarBasis !== 'calendar'
@@ -350,41 +610,117 @@ export function AutomationROIPage() {
   const tableCanIncrementLifetime = tableLifetimeIndex < LIFETIME_PRESETS_YEARS.length - 1
   const tableLifetimeSliderPercent =
     (tableLifetimeIndex / Math.max(1, LIFETIME_PRESETS_YEARS.length - 1)) * 100
+  const tableLifetimeAtMin = !tableCanDecrementLifetime
+  const tableLifetimeAtMax = !tableCanIncrementLifetime
+  const tableSliderIndicatorPositionClass = tableLifetimeAtMin
+    ? 'translate-x-0'
+    : tableLifetimeAtMax
+      ? '-translate-x-full'
+      : '-translate-x-1/2'
+  const canShowTableScrollControl = isTableNarrow
+  const tableSliderControlSelected = activeTableCursorIndex === tableSliderIndicatorCursorIndex
+  const tableSliderLeftKeyActive =
+    tableSliderControlSelected && tableArrowPressed.left && tableCanDecrementLifetime
+  const tableSliderRightKeyActive =
+    tableSliderControlSelected && tableArrowPressed.right && tableCanIncrementLifetime
+  const tableScrollControlSelected = activeTableCursorIndex === tableScrollCursorIndex
+  const tableScrollLeftKeyActive =
+    tableScrollControlSelected && tableArrowPressed.left && tableCanScrollLeft
+  const tableScrollRightKeyActive =
+    tableScrollControlSelected && tableArrowPressed.right && tableCanScrollRight
+  const tableScrollKeycapClass = (active: boolean, disabled: boolean) =>
+    cn(
+      'inline-flex h-4 w-4 min-w-4 items-center justify-center rounded-[3px] border px-0 text-[9px]',
+      active
+        ? 'border-foreground font-bold text-foreground'
+        : disabled
+          ? 'border-border font-medium text-border'
+          : 'border-border font-medium text-muted-foreground',
+    )
+  const clearTableTooltipDelay = useCallback(() => {
+    if (tableTooltipDelayRef.current !== null) {
+      window.clearTimeout(tableTooltipDelayRef.current)
+      tableTooltipDelayRef.current = null
+    }
+  }, [])
 
-  const columnItems = [...columns.map((column) => ({ kind: 'column' as const, column })), { kind: 'new-column' as const }]
-  const rowItems = [...rows.map((row) => ({ kind: 'row' as const, row })), { kind: 'new-row' as const }]
-  const clampedCustomizeColumnCursorIndex = clampIndex(
-    customizeColumnCursorIndex,
-    columnItems.length,
+  const hideTableTooltip = useCallback(() => {
+    hoveredApproxCellRef.current = null
+    pendingTableTooltipRef.current = null
+    clearTableTooltipDelay()
+    setTableTooltip(null)
+  }, [clearTableTooltipDelay])
+
+  const scheduleTableTooltip = useCallback(
+    (key: string, text: string, x: number, y: number) => {
+      hoveredApproxCellRef.current = key
+      pendingTableTooltipRef.current = { key, text, x, y }
+      clearTableTooltipDelay()
+      setTableTooltip(null)
+      tableTooltipDelayRef.current = window.setTimeout(() => {
+        const pending = pendingTableTooltipRef.current
+        if (!pending || hoveredApproxCellRef.current !== pending.key) {
+          return
+        }
+        setTableTooltip(pending)
+      }, TABLE_TOOLTIP_SHOW_DELAY_MS)
+    },
+    [clearTableTooltipDelay],
   )
-  const clampedCustomizeRowCursorIndex = clampIndex(
-    customizeRowCursorIndex,
-    rowItems.length,
+
+  const handleApproximateCellEnter = useCallback(
+    (
+      key: string,
+      text: string,
+      event: ReactMouseEvent<HTMLElement>,
+    ) => {
+      scheduleTableTooltip(key, text, event.clientX, event.clientY)
+    },
+    [scheduleTableTooltip],
   )
-  const clampedCustomizeColumnSelectedIndex = clampIndex(
-    customizeColumnSelectedIndex,
-    columnItems.length,
+
+  const handleApproximateCellMove = useCallback(
+    (key: string, event: ReactMouseEvent<HTMLElement>) => {
+      const pointer = { x: event.clientX, y: event.clientY }
+      const pending = pendingTableTooltipRef.current
+      if (pending && pending.key === key) {
+        pendingTableTooltipRef.current = { ...pending, ...pointer }
+      }
+
+      setTableTooltip((current) =>
+        current && current.key === key ? { ...current, ...pointer } : current,
+      )
+    },
+    [],
   )
-  const clampedCustomizeRowSelectedIndex = clampIndex(
-    customizeRowSelectedIndex,
-    rowItems.length,
+
+  const handleApproximateCellLeave = useCallback(
+    (key: string) => {
+      if (hoveredApproxCellRef.current !== key) {
+        return
+      }
+
+      hideTableTooltip()
+    },
+    [hideTableTooltip],
   )
-  const hasCustomizePendingChanges = useMemo(
-    () =>
-      customizeBaseline
-        ? !sameRows(rows, customizeBaseline.rows) ||
-          !sameColumns(columns, customizeBaseline.columns)
-        : false,
-    [customizeBaseline, rows, columns],
-  )
-  const customizeActionItems = [
-    ...(hasCustomizePendingChanges ? (['save'] as const) : []),
-    'cancel' as const,
-  ]
-  const clampedCustomizeActionCursorIndex = clampIndex(
-    customizeActionCursorIndex,
-    customizeActionItems.length,
-  )
+
+  const updateTableScrollAvailability = useCallback(() => {
+    const viewport = tableScrollViewportRef.current
+    if (!viewport) {
+      setTableCanScrollLeft(false)
+      setTableCanScrollRight(false)
+      return
+    }
+
+    const maxScrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth)
+    const nextCanScrollLeft = viewport.scrollLeft > TABLE_SCROLL_EPSILON_PX
+    const nextCanScrollRight =
+      maxScrollLeft - viewport.scrollLeft > TABLE_SCROLL_EPSILON_PX
+    setTableCanScrollLeft(nextCanScrollLeft)
+    setTableCanScrollRight(nextCanScrollRight)
+  }, [])
+
   const persistedLifetimeYears = useMemo(() => {
     const isPreset = LIFETIME_PRESETS_YEARS.some((preset) =>
       valuesNearlyEqual(preset, lifetimeYears),
@@ -403,7 +739,142 @@ export function AutomationROIPage() {
   }, [view])
 
   useEffect(() => {
-    savePersistedState({
+    autoHideKeyCommandsRef.current = autoHideKeyCommands
+  }, [autoHideKeyCommands])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const query = `(max-width: ${TABLE_LAYOUT_BREAKPOINT_PX - 1}px)`
+    const mediaQueryList = window.matchMedia(query)
+    const handleChange = () => {
+      setIsTableNarrow(mediaQueryList.matches)
+    }
+
+    handleChange()
+    mediaQueryList.addEventListener('change', handleChange)
+    return () => {
+      mediaQueryList.removeEventListener('change', handleChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (view !== 'table') {
+      const clearPressedTimeout = window.setTimeout(() => {
+        setTableArrowPressed({ left: false, right: false })
+      }, 0)
+      return () => {
+        window.clearTimeout(clearPressedTimeout)
+      }
+    }
+
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') {
+        setTableArrowPressed((current) => (current.left ? current : { ...current, left: true }))
+        return
+      }
+
+      if (event.key === 'ArrowRight') {
+        setTableArrowPressed((current) => (current.right ? current : { ...current, right: true }))
+      }
+    }
+
+    const onKeyUp = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') {
+        setTableArrowPressed((current) => (current.left ? { ...current, left: false } : current))
+        return
+      }
+
+      if (event.key === 'ArrowRight') {
+        setTableArrowPressed((current) => (current.right ? { ...current, right: false } : current))
+      }
+    }
+
+    const clearPressed = () => {
+      setTableArrowPressed({ left: false, right: false })
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', clearPressed)
+    document.addEventListener('visibilitychange', clearPressed)
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', clearPressed)
+      document.removeEventListener('visibilitychange', clearPressed)
+    }
+  }, [view])
+
+  useEffect(() => {
+    const viewport = tableScrollViewportRef.current
+    if (!viewport) {
+      return
+    }
+
+    const handleScroll = () => {
+      updateTableScrollAvailability()
+    }
+
+    viewport.addEventListener('scroll', handleScroll, { passive: true })
+    window.addEventListener('resize', handleScroll)
+
+    const observer = new ResizeObserver(handleScroll)
+    observer.observe(viewport)
+    const tableContent = viewport.firstElementChild
+    if (tableContent instanceof HTMLElement) {
+      observer.observe(tableContent)
+    }
+
+    const raf = window.requestAnimationFrame(handleScroll)
+
+    return () => {
+      viewport.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('resize', handleScroll)
+      window.cancelAnimationFrame(raf)
+      observer.disconnect()
+    }
+  }, [columns.length, rows.length, view, updateTableScrollAvailability])
+
+  useEffect(() => {
+    if (view !== 'table' || !isTableNarrow) {
+      return
+    }
+
+    // Re-measure after table view transitions complete to avoid stale disabled keycaps.
+    const raf = window.requestAnimationFrame(() => {
+      updateTableScrollAvailability()
+    })
+    const t1 = window.setTimeout(() => updateTableScrollAvailability(), 80)
+    const t2 = window.setTimeout(() => updateTableScrollAvailability(), 220)
+
+    return () => {
+      window.cancelAnimationFrame(raf)
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+    }
+  }, [isTableNarrow, updateTableScrollAvailability, view])
+
+  useEffect(() => () => clearTableTooltipDelay(), [clearTableTooltipDelay])
+
+  useEffect(() => {
+    if (view === 'table' && displayMode !== 'exact') {
+      return
+    }
+
+    const hideTimer = window.setTimeout(() => {
+      hideTableTooltip()
+    }, 0)
+    return () => {
+      window.clearTimeout(hideTimer)
+    }
+  }, [displayMode, hideTableTooltip, view])
+
+  useEffect(() => {
+    const payload = {
       lifetimeYears: persistedLifetimeYears,
       calendarBasis,
       customDaysPerYear,
@@ -412,7 +883,40 @@ export function AutomationROIPage() {
       displayMode,
       significantDigits,
       autoHideKeyCommands,
-    })
+    }
+
+    let timeoutId: number | null = null
+    let idleId: number | null = null
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (
+        callback: IdleRequestCallback,
+        options?: IdleRequestOptions,
+      ) => number
+      cancelIdleCallback?: (handle: number) => void
+    }
+
+    const persist = () => {
+      savePersistedState(payload)
+    }
+
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      idleId = idleWindow.requestIdleCallback(() => {
+        persist()
+      }, { timeout: 800 })
+    } else {
+      timeoutId = window.setTimeout(() => {
+        persist()
+      }, 180)
+    }
+
+    return () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId)
+      }
+      if (idleId !== null && typeof idleWindow.cancelIdleCallback === 'function') {
+        idleWindow.cancelIdleCallback(idleId)
+      }
+    }
   }, [
     persistedLifetimeYears,
     calendarBasis,
@@ -477,38 +981,117 @@ export function AutomationROIPage() {
     }
   }, [focusCurrentViewAutofocus])
 
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const nextNavigation = parseNavigationStateFromPath(window.location.pathname)
+      navigationHistoryIndexRef.current = getNavigationHistoryIndex(event.state)
+      isApplyingHistoryNavigationRef.current = true
+      setMenuReturnView(nextNavigation.menuReturnView)
+      setSettingsReturnView(nextNavigation.settingsReturnView)
+      setTableEditMenuKind(nextNavigation.tableEditMenuKind)
+      setMenuCustomKind(nextNavigation.menuCustomKind)
+      setView(nextNavigation.view)
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => {
+      window.removeEventListener('popstate', handlePopState)
+    }
+  }, [])
+
+  useEffect(() => {
+    const currentPath = window.location.pathname
+    const nextPath = buildNavigationPath({
+      view,
+      menuReturnView,
+      settingsReturnView,
+      tableEditMenuKind,
+      menuCustomKind,
+    })
+
+    if (!hasInitializedUrlHistoryRef.current) {
+      hasInitializedUrlHistoryRef.current = true
+      navigationHistoryIndexRef.current = getNavigationHistoryIndex(window.history.state)
+      lastNavigationPathRef.current = writeNavigationPathToUrl(
+        nextPath,
+        'replace',
+        navigationHistoryIndexRef.current,
+      )
+      return
+    }
+
+    if (isApplyingHistoryNavigationRef.current) {
+      isApplyingHistoryNavigationRef.current = false
+      if (nextPath !== currentPath) {
+        lastNavigationPathRef.current = writeNavigationPathToUrl(
+          nextPath,
+          'replace',
+          navigationHistoryIndexRef.current,
+        )
+        return
+      }
+
+      lastNavigationPathRef.current = currentPath
+      return
+    }
+
+    if (nextPath === lastNavigationPathRef.current) {
+      return
+    }
+
+    navigationHistoryIndexRef.current += 1
+    lastNavigationPathRef.current = writeNavigationPathToUrl(
+      nextPath,
+      'push',
+      navigationHistoryIndexRef.current,
+    )
+  }, [menuCustomKind, menuReturnView, settingsReturnView, tableEditMenuKind, view])
+
   function openFrequencyMenu(returnView: BaseView) {
     setMenuReturnView(returnView)
-    const selectedIndex = frequencyOptions.findIndex(
-      (option) =>
-        option.value.amount === focusFrequency.amount && option.value.unit === focusFrequency.unit,
-    )
-    setMenuIndex(selectedIndex >= 0 ? selectedIndex : menuNewOptionIndex)
+    setMenuIndex(0)
+    setMenuCursorVisible(false)
     setView('menu-frequency')
   }
 
   function openTimeMenu(returnView: BaseView) {
     setMenuReturnView(returnView)
-    const selectedIndex = timeOptions.findIndex(
-      (option) => option.seconds === focusTimeSavedSeconds,
-    )
-    setMenuIndex(selectedIndex >= 0 ? selectedIndex : menuNewOptionIndex)
+    setMenuIndex(0)
+    setMenuCursorVisible(false)
     setView('menu-time')
   }
 
   function openLifetimeMenu(returnView: BaseView) {
     setMenuReturnView(returnView)
-    const selectedIndex = lifetimeOptions.findIndex((option) =>
-      valuesNearlyEqual(option.years, lifetimeYears),
-    )
-    setMenuIndex(selectedIndex >= 0 ? selectedIndex : menuNewOptionIndex)
+    setMenuIndex(0)
+    setMenuCursorVisible(false)
     setView('menu-lifetime')
+  }
+
+  function openTableEditMenu(kind: TableEditMenuKind) {
+    setTableEditMenuKind(kind)
+    setTableEditMenuIndex(0)
+    setTableEditMenuCursorVisible(false)
+    setTableEditMenuHasInteracted((current) => ({ ...current, [kind]: false }))
+    setView(kind === 'rows' ? 'menu-edit-rows' : 'menu-edit-columns')
   }
 
   function openSettings(returnView: Exclude<View, 'settings'>) {
     setSettingsReturnView(returnView)
     setSettingsIndex(1)
     setView('settings')
+  }
+
+  function navigateBackFromSettings() {
+    if (navigationHistoryIndexRef.current > 0) {
+      window.history.back()
+      return
+    }
+
+    isApplyingHistoryNavigationRef.current = true
+    navigationHistoryIndexRef.current = 0
+    lastNavigationPathRef.current = writeNavigationPathToUrl('/', 'replace', 0)
+    setView('home')
   }
 
   function selectMenuItem(index: number) {
@@ -563,7 +1146,66 @@ export function AutomationROIPage() {
 
   function closeAddMenuOption() {
     setMenuCustomDraft('')
+    setMenuIndex(0)
+    setMenuCursorVisible(false)
     setView(getMenuViewForKind(menuCustomKind))
+  }
+
+  function returnToTableEditMenu(cursorIndex = 0) {
+    setTableEditMenuIndex(Math.max(0, cursorIndex))
+    setTableEditMenuCursorVisible(false)
+    setView(tableEditMenuKind === 'rows' ? 'menu-edit-rows' : 'menu-edit-columns')
+  }
+
+  function activateTableEditMenuItem(index: number) {
+    const item = tableEditMenuItems[index]
+    if (!item) {
+      return
+    }
+
+    if (item.kind === 'cancel') {
+      setView('table')
+      return
+    }
+
+    if (item.kind === 'new') {
+      if (activeTableEditMenuKind === 'rows') {
+        setTableEditMenuKind('rows')
+        setRowDraft('')
+        setAddRowCursorIndex(0)
+        setView('add-row')
+        return
+      }
+
+      setTableEditMenuKind('columns')
+      setColumnDraft('')
+      setAddColumnCursorIndex(0)
+      setView('add-column')
+      return
+    }
+
+    if (item.kind === 'default-row') {
+      toggleDefaultRow(item.row.id)
+      setTableEditMenuHasInteracted((current) => ({ ...current, rows: true }))
+      return
+    }
+
+    if (item.kind === 'default-column') {
+      toggleDefaultColumn(item.column.id)
+      setTableEditMenuHasInteracted((current) => ({ ...current, columns: true }))
+      return
+    }
+
+    if (item.kind === 'custom-row') {
+      deleteCustomRow(item.row.id)
+      setTableEditMenuHasInteracted((current) => ({ ...current, rows: true }))
+      return
+    }
+
+    if (item.kind === 'custom-column') {
+      deleteCustomColumn(item.column.id)
+      setTableEditMenuHasInteracted((current) => ({ ...current, columns: true }))
+    }
   }
 
   function handleAddMenuOptionKeyDown(event: KeyboardEvent<HTMLElement>) {
@@ -700,8 +1342,14 @@ export function AutomationROIPage() {
 
     if (index >= homeFooterStartIndex && index <= homeCursorMaxIndex) {
       const footerIndex = index - homeFooterStartIndex
-      if (footerIndex < homeFooterRevealCount) {
-        handleFooterAction(footerIndex)
+      if (homeFooterCommandToggleAvailable && footerIndex === 0) {
+        setAutoHideKeyCommands(!autoHideKeyCommands)
+        return
+      }
+
+      const linkIndex = footerIndex - (homeFooterCommandToggleAvailable ? 1 : 0)
+      if (linkIndex >= 0 && linkIndex < homeFooterRevealCount) {
+        handleFooterAction(linkIndex)
       }
     }
   }
@@ -744,7 +1392,7 @@ export function AutomationROIPage() {
       if (
         activeHomeCursorIndex === HOME_CURSOR_RESULT_INDEX &&
         hasResettableChanges &&
-        homeRevealStage >= HOME_REVEAL_STAGE_RESET
+        homeRevealStage >= HOME_REVEAL_STAGE_SHOW_TABLE
       ) {
         resetAllDefaults()
         return
@@ -803,6 +1451,44 @@ export function AutomationROIPage() {
     }
   }
 
+  function handleTableEditMenuKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (!isTableEditMenuView) {
+      return
+    }
+
+    const moveBackward =
+      event.key === 'ArrowUp' ||
+      event.key === 'ArrowLeft' ||
+      (event.key === 'Tab' && event.shiftKey)
+    const moveForward =
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowRight' ||
+      (event.key === 'Tab' && !event.shiftKey)
+
+    if (moveBackward || moveForward) {
+      event.preventDefault()
+      setTableEditMenuIndex((current) => {
+        if (moveBackward) {
+          return current === 0 ? tableEditMenuCursorMaxIndex : current - 1
+        }
+
+        return current === tableEditMenuCursorMaxIndex ? 0 : current + 1
+      })
+      return
+    }
+
+    if (isActivationKey(event.key)) {
+      event.preventDefault()
+      activateTableEditMenuItem(tableEditMenuIndex)
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setView('table')
+    }
+  }
+
   function handleTableAction(index: number) {
     setTableCursorIndex(index)
 
@@ -835,13 +1521,31 @@ export function AutomationROIPage() {
       return
     }
 
-    if (index === tableCustomizeCursorIndex) {
-      openCustomize()
+    if (index === tableScrollCursorIndex) {
+      return
+    }
+
+    if (index === tableRowsEditCursorIndex) {
+      openTableEditMenu('rows')
+      return
+    }
+
+    if (index === tableColumnsEditCursorIndex) {
+      openTableEditMenu('columns')
       return
     }
 
     if (index >= tableFooterStartIndex && index <= tableCursorMaxIndex) {
-      handleFooterAction(index - tableFooterStartIndex)
+      const footerIndex = index - tableFooterStartIndex
+      if (tableFooterCommandToggleAvailable && footerIndex === 0) {
+        setAutoHideKeyCommands(!autoHideKeyCommands)
+        return
+      }
+
+      const linkIndex = footerIndex - (tableFooterCommandToggleAvailable ? 1 : 0)
+      if (linkIndex >= 0 && linkIndex < FOOTER_LINK_COUNT) {
+        handleFooterAction(linkIndex)
+      }
     }
   }
 
@@ -863,6 +1567,15 @@ export function AutomationROIPage() {
     ) {
       event.preventDefault()
       incrementLifetime(event.key === 'ArrowLeft' ? -1 : 1)
+      return
+    }
+
+    if (
+      activeTableCursorIndex === tableScrollCursorIndex &&
+      (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
+    ) {
+      event.preventDefault()
+      scrollTableByStep(event.key === 'ArrowLeft' ? -1 : 1)
       return
     }
 
@@ -902,6 +1615,7 @@ export function AutomationROIPage() {
 
     if (option.id === 'reset') {
       resetAllDefaults()
+      setSettingsIndex(settingsOptionStartIndex)
       return
     }
 
@@ -953,7 +1667,7 @@ export function AutomationROIPage() {
       event.preventDefault()
 
       if (settingsIndex === settingsBackIndex) {
-        setView(settingsReturnView)
+        navigateBackFromSettings()
         return
       }
 
@@ -962,26 +1676,8 @@ export function AutomationROIPage() {
 
     if (event.key === 'Escape') {
       event.preventDefault()
-      setView(settingsReturnView)
+      navigateBackFromSettings()
     }
-  }
-
-  function openCustomize() {
-    const firstCustomColumn = columnItems.findIndex(
-      (item) => item.kind === 'column' && item.column.isCustom,
-    )
-    const defaultColumnIndex = firstCustomColumn >= 0 ? firstCustomColumn : 0
-    setCustomizeSection('columns')
-    setCustomizeColumnCursorIndex(defaultColumnIndex)
-    setCustomizeColumnSelectedIndex(defaultColumnIndex)
-    setCustomizeRowCursorIndex((current) => clampIndex(current, rowItems.length))
-    setCustomizeRowSelectedIndex((current) => clampIndex(current, rowItems.length))
-    setCustomizeActionCursorIndex(0)
-    setCustomizeBaseline({
-      rows: rows.map((row) => ({ ...row })),
-      columns: columns.map((column) => ({ ...column })),
-    })
-    setView('customize')
   }
 
   function resetAllDefaults() {
@@ -992,243 +1688,16 @@ export function AutomationROIPage() {
     setResultTypewriterRunId((current) => current + 1)
   }
 
-  function activateCustomizeItem(
-    sectionOverride?: CustomizeSection,
-    indexOverride?: number,
-  ) {
-    const activeSection = sectionOverride ?? customizeSection
-    const activeIndex =
-      indexOverride ??
-      (activeSection === 'columns'
-        ? clampedCustomizeColumnCursorIndex
-        : clampedCustomizeRowCursorIndex)
-
-    if (activeSection === 'columns') {
-      setCustomizeColumnSelectedIndex(activeIndex)
-    } else {
-      setCustomizeRowSelectedIndex(activeIndex)
-    }
-
-    if (activeSection === 'columns') {
-      const item = columnItems[activeIndex]
-      if (!item) {
-        return
-      }
-
-      if (item.kind === 'new-column') {
-        setEditingColumnId(null)
-        setColumnDraft('')
-        setAddColumnCursorIndex(0)
-        setView('add-column')
-        return
-      }
-
-      if (!item.column.isCustom) {
-        toast.error('Preset columns are fixed. Add a new column instead.')
-        return
-      }
-
-      setEditingColumnId(item.column.id)
-      setColumnDraft(`${strip(item.column.amount)}/${item.column.unit}`)
-      setAddColumnCursorIndex(0)
-      setView('add-column')
-      return
-    }
-
-    const item = rowItems[activeIndex]
-    if (!item) {
-      return
-    }
-
-    if (item.kind === 'new-row') {
-      setEditingRowId(null)
-      setRowDraft('')
-      setAddRowCursorIndex(0)
-      setView('add-row')
-      return
-    }
-
-    if (!item.row.isCustom) {
-      toast.error('Preset rows are fixed. Add a new row instead.')
-      return
-    }
-
-    setEditingRowId(item.row.id)
-    setRowDraft(formatLongDuration(item.row.seconds))
-    setAddRowCursorIndex(0)
-    setView('add-row')
-  }
-
-  function deleteActiveCustomizeItem() {
-    if (customizeSection === 'actions') {
-      return
-    }
-
-    if (customizeSection === 'columns') {
-      const item = columnItems[clampedCustomizeColumnCursorIndex]
-      if (item?.kind === 'column' && item.column.isCustom) {
-        deleteCustomColumn(item.column.id)
-        setCustomizeColumnCursorIndex((current) => clampIndex(current, columnItems.length - 1))
-        setCustomizeColumnSelectedIndex((current) =>
-          clampIndex(current, columnItems.length - 1),
-        )
-      }
-      return
-    }
-
-    const item = rowItems[clampedCustomizeRowCursorIndex]
-    if (item?.kind === 'row' && item.row.isCustom) {
-      deleteCustomRow(item.row.id)
-      setCustomizeRowCursorIndex((current) => clampIndex(current, rowItems.length - 1))
-      setCustomizeRowSelectedIndex((current) => clampIndex(current, rowItems.length - 1))
-    }
-  }
-
-  function handleCustomizeKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (view !== 'customize') {
-      return
-    }
-
-    if (event.key === 'Tab') {
-      event.preventDefault()
-      const cancelActionIndex = Math.max(0, customizeActionItems.indexOf('cancel'))
-
-      if (event.shiftKey) {
-        if (customizeSection === 'columns') {
-          setCustomizeSection('actions')
-          setCustomizeActionCursorIndex(cancelActionIndex)
-        } else if (customizeSection === 'actions') {
-          setCustomizeSection('rows')
-          setCustomizeRowCursorIndex(0)
-        } else {
-          setCustomizeSection('columns')
-          setCustomizeColumnCursorIndex(0)
-        }
-      } else {
-        if (customizeSection === 'columns') {
-          setCustomizeSection('rows')
-          setCustomizeRowCursorIndex(0)
-        } else if (customizeSection === 'rows') {
-          setCustomizeSection('actions')
-          setCustomizeActionCursorIndex(cancelActionIndex)
-        } else {
-          setCustomizeSection('columns')
-          setCustomizeColumnCursorIndex(0)
-        }
-      }
-      return
-    }
-
-    const moveBackward =
-      event.key === 'ArrowUp' || event.key === 'ArrowLeft'
-    const moveForward =
-      event.key === 'ArrowDown' || event.key === 'ArrowRight'
-
-    if (moveBackward || moveForward) {
-      event.preventDefault()
-
-      const step = moveForward ? 1 : -1
-      const actionCount = customizeActionItems.length
-
-      if (customizeSection === 'columns') {
-        if (step > 0) {
-          if (clampedCustomizeColumnCursorIndex < columnItems.length - 1) {
-            setCustomizeColumnCursorIndex((current) =>
-              Math.min(current + 1, columnItems.length - 1),
-            )
-          } else {
-            setCustomizeSection('rows')
-            setCustomizeRowCursorIndex(0)
-          }
-        } else if (clampedCustomizeColumnCursorIndex > 0) {
-          setCustomizeColumnCursorIndex((current) => Math.max(current - 1, 0))
-        } else if (actionCount > 0) {
-          setCustomizeSection('actions')
-          setCustomizeActionCursorIndex(actionCount - 1)
-        } else {
-          setCustomizeSection('rows')
-          setCustomizeRowCursorIndex(Math.max(0, rowItems.length - 1))
-        }
-        return
-      }
-
-      if (customizeSection === 'rows') {
-        if (step > 0) {
-          if (clampedCustomizeRowCursorIndex < rowItems.length - 1) {
-            setCustomizeRowCursorIndex((current) => Math.min(current + 1, rowItems.length - 1))
-          } else if (actionCount > 0) {
-            setCustomizeSection('actions')
-            setCustomizeActionCursorIndex(0)
-          } else {
-            setCustomizeSection('columns')
-            setCustomizeColumnCursorIndex(0)
-          }
-        } else if (clampedCustomizeRowCursorIndex > 0) {
-          setCustomizeRowCursorIndex((current) => Math.max(current - 1, 0))
-        } else {
-          setCustomizeSection('columns')
-          setCustomizeColumnCursorIndex(Math.max(0, columnItems.length - 1))
-        }
-        return
-      }
-
-      if (step > 0) {
-        if (clampedCustomizeActionCursorIndex < actionCount - 1) {
-          setCustomizeActionCursorIndex((current) => Math.min(current + 1, actionCount - 1))
-        } else {
-          setCustomizeSection('columns')
-          setCustomizeColumnCursorIndex(0)
-        }
-      } else if (clampedCustomizeActionCursorIndex > 0) {
-        setCustomizeActionCursorIndex((current) => Math.max(current - 1, 0))
-      } else {
-        setCustomizeSection('rows')
-        setCustomizeRowCursorIndex(Math.max(0, rowItems.length - 1))
-      }
-    }
-
-    if (isActivationKey(event.key)) {
-      event.preventDefault()
-      if (customizeSection === 'columns') {
-        activateCustomizeItem('columns', clampedCustomizeColumnCursorIndex)
-        return
-      }
-      if (customizeSection === 'rows') {
-        activateCustomizeItem('rows', clampedCustomizeRowCursorIndex)
-        return
-      }
-
-      const action = customizeActionItems[clampedCustomizeActionCursorIndex]
-      if (action === 'save') {
-        setView('table')
-        return
-      }
-      setView('table')
-    }
-
-    if (event.key === 'Delete' || event.key === 'Backspace') {
-      event.preventDefault()
-      deleteActiveCustomizeItem()
-    }
-
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      setView('table')
-    }
-  }
-
   function closeAddColumn() {
-    setEditingColumnId(null)
     setColumnDraft('')
     setAddColumnCursorIndex(0)
-    setView('customize')
+    returnToTableEditMenu()
   }
 
   function closeAddRow() {
-    setEditingRowId(null)
     setRowDraft('')
     setAddRowCursorIndex(0)
-    setView('customize')
+    returnToTableEditMenu()
   }
 
   function focusAddColumnCursor(index: number) {
@@ -1237,12 +1706,7 @@ export function AutomationROIPage() {
       return
     }
 
-    if (index === 1) {
-      addColumnCancelRef.current?.focus({ preventScroll: true })
-      return
-    }
-
-    addColumnDeleteRef.current?.focus({ preventScroll: true })
+    addColumnCancelRef.current?.focus({ preventScroll: true })
   }
 
   function focusAddRowCursor(index: number) {
@@ -1251,12 +1715,7 @@ export function AutomationROIPage() {
       return
     }
 
-    if (index === 1) {
-      addRowCancelRef.current?.focus({ preventScroll: true })
-      return
-    }
-
-    addRowDeleteRef.current?.focus({ preventScroll: true })
+    addRowCancelRef.current?.focus({ preventScroll: true })
   }
 
   function handleAddColumnKeyDown(event: KeyboardEvent<HTMLElement>) {
@@ -1272,7 +1731,7 @@ export function AutomationROIPage() {
       event.key === 'ArrowDown' ||
       event.key === 'ArrowRight' ||
       (event.key === 'Tab' && !event.shiftKey)
-    const maxIndex = editingColumnId ? 2 : 1
+    const maxIndex = 1
 
     if (moveBackward || moveForward) {
       event.preventDefault()
@@ -1302,12 +1761,7 @@ export function AutomationROIPage() {
 
     if (isActivationKey(event.key) && addColumnCursorIndex !== 0) {
       event.preventDefault()
-      if (addColumnCursorIndex === 1) {
-        closeAddColumn()
-        return
-      }
-
-      deleteEditingColumn()
+      closeAddColumn()
     }
   }
 
@@ -1324,7 +1778,7 @@ export function AutomationROIPage() {
       event.key === 'ArrowDown' ||
       event.key === 'ArrowRight' ||
       (event.key === 'Tab' && !event.shiftKey)
-    const maxIndex = editingRowId ? 2 : 1
+    const maxIndex = 1
 
     if (moveBackward || moveForward) {
       event.preventDefault()
@@ -1354,12 +1808,7 @@ export function AutomationROIPage() {
 
     if (isActivationKey(event.key) && addRowCursorIndex !== 0) {
       event.preventDefault()
-      if (addRowCursorIndex === 1) {
-        closeAddRow()
-        return
-      }
-
-      deleteEditingRow()
+      closeAddRow()
     }
   }
 
@@ -1370,23 +1819,28 @@ export function AutomationROIPage() {
       return
     }
 
-    if (editingColumnId) {
-      updateCustomColumn(editingColumnId, {
-        label: parsed.label,
-        amount: parsed.amount,
-        unit: parsed.unit,
-      })
-    } else {
-      addCustomColumn({
-        label: parsed.label,
-        amount: parsed.amount,
-        unit: parsed.unit,
-      })
-    }
+    addCustomColumn({
+      label: parsed.label,
+      amount: parsed.amount,
+      unit: parsed.unit,
+    })
 
-    setEditingColumnId(null)
+    const nextColumns = useAutomationROIStore.getState().columns
+    const nextCustomColumns = nextColumns.filter((column) => column.isCustom)
+    const createdColumnIndex = nextCustomColumns.findIndex(
+      (column) =>
+        column.label === parsed.label &&
+        column.amount === parsed.amount &&
+        column.unit === parsed.unit,
+    )
+    const nextMenuIndex =
+      createdColumnIndex >= 0
+        ? DEFAULT_COLUMNS.length + createdColumnIndex
+        : 0
+
     setColumnDraft('')
-    setView('customize')
+    setTableEditMenuHasInteracted((current) => ({ ...current, columns: true }))
+    returnToTableEditMenu(nextMenuIndex)
   }
 
   function submitRow() {
@@ -1396,43 +1850,24 @@ export function AutomationROIPage() {
       return
     }
 
-    if (editingRowId) {
-      updateCustomRow(editingRowId, {
-        label: parsed.label,
-        seconds: parsed.seconds,
-      })
-    } else {
-      addCustomRow({
-        label: parsed.label,
-        seconds: parsed.seconds,
-      })
-    }
+    addCustomRow({
+      label: parsed.label,
+      seconds: parsed.seconds,
+    })
 
-    setEditingRowId(null)
+    const nextRows = useAutomationROIStore.getState().rows
+    const nextCustomRows = nextRows.filter((row) => row.isCustom)
+    const createdRowIndex = nextCustomRows.findIndex(
+      (row) => row.label === parsed.label && row.seconds === parsed.seconds,
+    )
+    const nextMenuIndex =
+      createdRowIndex >= 0
+        ? DEFAULT_ROWS.length + createdRowIndex
+        : 0
+
     setRowDraft('')
-    setView('customize')
-  }
-
-  function deleteEditingColumn() {
-    if (!editingColumnId) {
-      return
-    }
-
-    deleteCustomColumn(editingColumnId)
-    setEditingColumnId(null)
-    setColumnDraft('')
-    setView('customize')
-  }
-
-  function deleteEditingRow() {
-    if (!editingRowId) {
-      return
-    }
-
-    deleteCustomRow(editingRowId)
-    setEditingRowId(null)
-    setRowDraft('')
-    setView('customize')
+    setTableEditMenuHasInteracted((current) => ({ ...current, rows: true }))
+    returnToTableEditMenu(nextMenuIndex)
   }
 
   function incrementLifetime(step: 1 | -1) {
@@ -1452,7 +1887,10 @@ export function AutomationROIPage() {
       Math.max(0, index),
     )
     const nextYears = LIFETIME_PRESETS_YEARS[clamped]
-    if (nextYears !== undefined) {
+    if (
+      nextYears !== undefined &&
+      !valuesNearlyEqual(nextYears, lifetimeYears)
+    ) {
       setLifetimeYears(nextYears)
     }
   }
@@ -1493,6 +1931,35 @@ export function AutomationROIPage() {
     event.preventDefault()
     setTableCursorIndex(tableSliderIndicatorCursorIndex)
     startLifetimeIndicatorDrag(event.clientX)
+  }
+
+  function scrollTableByStep(direction: 1 | -1) {
+    const viewport = tableScrollViewportRef.current
+    if (!viewport) {
+      return
+    }
+
+    if (direction < 0 && !tableCanScrollLeft) {
+      return
+    }
+
+    if (direction > 0 && !tableCanScrollRight) {
+      return
+    }
+
+    const maxScrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth)
+    const targetScrollLeft = Math.max(
+      0,
+      Math.min(maxScrollLeft, viewport.scrollLeft + direction * TABLE_SCROLL_STEP_PX),
+    )
+
+    viewport.scrollTo({
+      left: targetScrollLeft,
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+    })
+    window.requestAnimationFrame(() => {
+      updateTableScrollAvailability()
+    })
   }
 
   function cycleTheme() {
@@ -1563,23 +2030,44 @@ export function AutomationROIPage() {
     { id: 'theme' as const, label: 'Theme:', value: terminalThemeLabel },
     {
       id: 'keyboard' as const,
-      label: 'Auto-hide key commands:',
+      label: 'Show key commands:',
       value: autoHideKeyCommands ? 'Yes' : 'No',
     },
     ...(hasResettableChanges
-      ? [{ id: 'reset' as const, label: 'Reset to defaults' }]
+      ? [{ id: 'reset' as const, label: '⟲ Reset to defaults' }]
       : []),
   ]
   const settingsBackIndex = 0
   const settingsOptionStartIndex = 1
   const settingsCursorMaxIndex = settingsOptions.length
 
+  useEffect(() => {
+    if (!isSettingsView) {
+      return
+    }
+
+    if (settingsIndex <= settingsCursorMaxIndex) {
+      return
+    }
+
+    const clampSettingsCursorTimeout = window.setTimeout(() => {
+      setSettingsIndex(settingsOptionStartIndex)
+    }, 0)
+
+    return () => {
+      window.clearTimeout(clampSettingsCursorTimeout)
+    }
+  }, [isSettingsView, settingsCursorMaxIndex, settingsIndex, settingsOptionStartIndex])
+
+  const homeTitle = 'Is It Worth the Time?'
   const homeText1 = 'If, by optimizing a task that I do '
-  const homeText2 = ', I can save'
+  const homeText2 = ', I can save '
   const homeText3 = ' each time, and I keep doing it over a '
   const homeText4 = ' period, it will stop being worth it when optimizing it takes longer than:'
 
-  const homeFlowStep1 = getFlowStepCount(homeText1)
+  const homeFlowStartStep = getFlowStepCount(homeTitle) + 1
+  const homeFlowText1Delay = homeFlowStartStep
+  const homeFlowStep1 = homeFlowText1Delay + getFlowStepCount(homeText1)
   const homeFlowStep2 = homeFlowStep1 + 1
   const homeFlowStep3 = homeFlowStep2 + getFlowStepCount(homeText2) + 1
   const homeFlowStep4 = homeFlowStep3 + getFlowStepCount(homeText3) + 1
@@ -1609,7 +2097,7 @@ export function AutomationROIPage() {
       return
     }
 
-    const maxStage = HOME_REVEAL_STAGE_FOOTER_START + FOOTER_ACTION_COUNT - 1
+    const maxStage = HOME_REVEAL_STAGE_FOOTER_START
     if (prefersReducedMotion) {
       const reducedTimer = window.setTimeout(() => setHomeRevealStage(maxStage), 0)
       return () => {
@@ -1619,12 +2107,35 @@ export function AutomationROIPage() {
 
     const resetTimer = window.setTimeout(() => setHomeRevealStage(0), 0)
     const baseDelayMs = Math.max(0, Math.round(homeSentenceEndDelaySeconds * 1000))
-    const stageTimers = Array.from({ length: maxStage }, (_, index) =>
+    const resultStageDelayMs = baseDelayMs
+    const showTableStageDelayMs =
+      resultStageDelayMs + HOME_RESULT_TYPEWRITER_DURATION_MS + HOME_STAGE_STAGGER_MS
+    const keyCommandsStageDelayMs =
+      showTableStageDelayMs +
+      Math.max(
+        HOME_SHOW_TABLE_TYPEWRITER_DURATION_MS,
+        HOME_SHOW_TABLE_LABEL.length * MENU_OPTION_CHAR_MS,
+      ) +
+      HOME_STAGE_STAGGER_MS
+    const keyCommandsToFooterDelayMs = autoHideKeyCommandsRef.current
+      ? HOME_KEY_COMMANDS_TO_FOOTER_DELAY_MS
+      : HOME_KEY_COMMANDS_LINK_TO_FOOTER_DELAY_MS
+    const footerStageDelayMs = keyCommandsStageDelayMs + keyCommandsToFooterDelayMs
+    const stageTimers = [
+      window.setTimeout(() => setHomeRevealStage(HOME_REVEAL_STAGE_RESULT), resultStageDelayMs),
       window.setTimeout(
-        () => setHomeRevealStage(index + 1),
-        baseDelayMs + HOME_STAGE_STAGGER_MS * index,
+        () => setHomeRevealStage(HOME_REVEAL_STAGE_SHOW_TABLE),
+        showTableStageDelayMs,
       ),
-    )
+      window.setTimeout(
+        () => setHomeRevealStage(HOME_REVEAL_STAGE_KEY_COMMANDS),
+        keyCommandsStageDelayMs,
+      ),
+      window.setTimeout(
+        () => setHomeRevealStage(HOME_REVEAL_STAGE_FOOTER_START),
+        footerStageDelayMs,
+      ),
+    ]
 
     return () => {
       window.clearTimeout(resetTimer)
@@ -1633,7 +2144,7 @@ export function AutomationROIPage() {
   }, [homeSentenceEndDelaySeconds, prefersReducedMotion, view])
 
   return (
-    <main className="min-h-screen bg-background px-4 py-6 text-foreground sm:px-12 sm:py-12">
+    <main className="min-h-screen bg-background p-6 text-foreground sm:p-12">
       <AnimatePresence mode="wait">
         {view === 'home' ? (
           <motion.section
@@ -1647,13 +2158,13 @@ export function AutomationROIPage() {
             tabIndex={0}
             data-screen-autofocus-view="home"
           >
-            <TerminalHeader title="Is It Worth the Time?" />
+            <TerminalHeader title={homeTitle} typewriter />
 
             <div className="grow max-w-[500px]">
               <p className="m-0 text-[12px] font-medium leading-6 text-muted-foreground">
-                <TypedWords text={homeText1} />
+                <TypedWords text={homeText1} delaySteps={homeFlowText1Delay} />
                 <TypedInlineSlot delaySteps={homeFlowStep1}>
-                  <span className="mr-[12px] inline-flex">
+                  <span className="mr-2 inline-flex">
                     <InlineAction
                       label={
                         <InlineSelectTriggerLabel
@@ -1668,9 +2179,8 @@ export function AutomationROIPage() {
                   </span>
                 </TypedInlineSlot>
                 <TypedWords text={homeText2} delaySteps={homeFlowStep2} />
-                <br />
                 <TypedInlineSlot delaySteps={homeFlowStep2 + getFlowStepCount(homeText2)}>
-                  <span className="mr-[12px] inline-flex">
+                  <span className="mr-2 inline-flex">
                     <InlineAction
                       label={
                         <InlineSelectTriggerLabel
@@ -1686,7 +2196,7 @@ export function AutomationROIPage() {
                 </TypedInlineSlot>
                 <TypedWords text={homeText3} delaySteps={homeFlowStep3} />
                 <TypedInlineSlot delaySteps={homeFlowStep3 + getFlowStepCount(homeText3)}>
-                  <span className="mr-[12px] inline-flex">
+                  <span className="mr-2 inline-flex">
                     <InlineAction
                       label={
                         <InlineSelectTriggerLabel
@@ -1748,14 +2258,14 @@ export function AutomationROIPage() {
                 {homeRevealStage >= HOME_REVEAL_STAGE_SHOW_TABLE ? (
                   <motion.div {...stagedRevealMotionProps}>
                     <InlineAction
-                      label="Show full table 🡪"
+                      label={<MenuOptionTypewriter text={HOME_SHOW_TABLE_LABEL} startDelayMs={0} />}
                       onClick={() => handleHomeAction(4)}
                       active={activeHomeCursorIndex === 4}
                     />
                   </motion.div>
                 ) : null}
 
-                {hasResettableChanges && homeRevealStage >= HOME_REVEAL_STAGE_RESET ? (
+                {hasResettableChanges && homeRevealStage >= HOME_REVEAL_STAGE_SHOW_TABLE ? (
                   <>
                     <motion.div {...stagedRevealMotionProps}>
                       <Separator aria-hidden />
@@ -1771,7 +2281,7 @@ export function AutomationROIPage() {
                 ) : null}
               </div>
 
-              {hasCustomCalendar && homeRevealStage >= HOME_REVEAL_STAGE_NOTE ? (
+              {hasCustomCalendar && homeRevealStage >= HOME_REVEAL_STAGE_SHOW_TABLE ? (
                 <motion.p
                   {...stagedRevealMotionProps}
                   className="mt-3 text-[10px] text-muted-foreground"
@@ -1787,16 +2297,13 @@ export function AutomationROIPage() {
                   ? activeHomeCursorIndex - homeFooterStartIndex
                   : -1
               }
-              onAction={(index) => handleHomeAction(homeFooterStartIndex + index)}
+              onAction={handleFooterAction}
+              onToggleCommands={(nextVisible) => setAutoHideKeyCommands(nextVisible)}
+              onCommandToggleAvailabilityChange={setHomeFooterCommandToggleAvailable}
               revealCount={homeFooterRevealCount}
-              autoHideKeyCommands={autoHideKeyCommands}
-              keyboardCommandsVisible={homeFooterRevealCount > 0}
-              className={cn(
-                !prefersReducedMotion && 'transition-all duration-200',
-                homeFooterRevealCount > 0
-                  ? 'opacity-100 translate-y-0'
-                  : 'pointer-events-none opacity-0 translate-y-1',
-              )}
+              keyboardCommandsEnabled={autoHideKeyCommands}
+              keyboardCommandsVisible={homeRevealStage >= HOME_REVEAL_STAGE_KEY_COMMANDS}
+              reserveIntroSpace
             />
           </motion.section>
         ) : null}
@@ -1816,7 +2323,7 @@ export function AutomationROIPage() {
             <TerminalHeader title="Is It Worth the Time?" />
 
             <div className="grow">
-              <div className="mb-8 flex items-center gap-4 text-[12px]">
+              <div className="mb-8 flex min-h-[17px] items-center gap-4 text-[12px]">
                 <InlineAction
                   label="🡨 Back"
                   onClick={() => handleTableAction(TABLE_CURSOR_BACK_INDEX)}
@@ -1824,7 +2331,7 @@ export function AutomationROIPage() {
                 />
                 {hasResettableChanges ? (
                   <>
-                    <Separator aria-hidden />
+                    <Separator aria-hidden className="leading-4" />
                     <InlineAction
                       label="⟲ Reset to defaults"
                       onClick={() => handleTableAction(tableResetIndex)}
@@ -1873,22 +2380,41 @@ export function AutomationROIPage() {
                       onClick={() => setTableCursorIndex(tableSliderIndicatorCursorIndex)}
                       onPointerDown={handleLifetimeIndicatorPointerDown}
                       className={cn(
-                        'group absolute top-0 inline-flex -translate-x-1/2 items-center pr-[12px] text-[10px] font-bold text-foreground focus-visible:outline-none',
+                        'group absolute top-0 inline-flex items-center gap-1 pr-[12px] text-[10px] font-bold text-foreground focus-visible:outline-none',
+                        tableSliderIndicatorPositionClass,
                       )}
                       style={{ left: `${tableLifetimeSliderPercent}%` }}
                     >
-                      <span className="text-underline">←</span>
+                      {tableCanDecrementLifetime ? (
+                        <kbd
+                          className={tableScrollKeycapClass(
+                            tableSliderLeftKeyActive,
+                            false,
+                          )}
+                        >
+                          🡨
+                        </kbd>
+                      ) : null}
                       <span
                         className={cn(
                           interactiveBaseClass,
-                          'mx-1 group-hover:motion-safe:after:origin-left group-hover:motion-safe:after:scale-x-100 group-hover:motion-reduce:after:opacity-100',
+                          'group-hover:motion-safe:after:origin-left group-hover:motion-safe:after:scale-x-100 group-hover:motion-reduce:after:opacity-100',
                           activeTableCursorIndex === tableSliderIndicatorCursorIndex &&
                             'motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100',
                         )}
                       >
                         {formatLifetimeShort(lifetimeYears)}
                       </span>
-                      <span className="text-underline">→</span>
+                      {tableCanIncrementLifetime ? (
+                        <kbd
+                          className={tableScrollKeycapClass(
+                            tableSliderRightKeyActive,
+                            false,
+                          )}
+                        >
+                          🡪
+                        </kbd>
+                      ) : null}
                       <TerminalCursor
                         active={activeTableCursorIndex === tableSliderIndicatorCursorIndex}
                         className="absolute right-0 top-1/2 -translate-y-1/2"
@@ -1922,10 +2448,14 @@ export function AutomationROIPage() {
                 </div>
               </div>
 
-              <div className="w-full max-w-[640px] overflow-x-auto pb-2">
-                <div className="w-fit text-[10px]">
+              <div
+                ref={tableScrollViewportRef}
+                onMouseLeave={hideTableTooltip}
+                className="w-full max-w-[640px] overflow-x-auto pb-2 max-[735px]:max-w-none max-[735px]:w-[calc(100%+3rem)] max-[735px]:-mr-12 max-sm:w-[calc(100%+1.5rem)] max-sm:-mr-6"
+              >
+                <div className="w-fit cursor-default select-none text-[10px] max-[735px]:pr-12 max-sm:pr-6">
                   <div className="grid" style={{ gridTemplateColumns: `46px repeat(${columns.length}, 99px)` }}>
-                    <div className="h-6" />
+                    <div className="sticky left-0 z-20 h-6 bg-background" />
                     {columns.map((column) => (
                       <div key={column.id} className="flex h-6 items-center justify-center font-bold text-foreground">
                         {column.label}
@@ -1943,29 +2473,187 @@ export function AutomationROIPage() {
                         customDaysPerYear={customDaysPerYear}
                         displayMode={displayMode}
                         significantDigits={significantDigits}
+                        onApproximateCellEnter={handleApproximateCellEnter}
+                        onApproximateCellMove={handleApproximateCellMove}
+                        onApproximateCellLeave={handleApproximateCellLeave}
                       />
                     ))}
                   </div>
                 </div>
               </div>
 
-              <div className="mt-2 flex max-w-[640px] flex-wrap items-center gap-x-4 gap-y-2 pl-[46px] text-[10px] text-muted-foreground h-3">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block size-[12px] border border-border bg-hatch" />
-                  Not Possible
-                </span>
-                <Separator />
-                <span>Rows: Time saved per task</span>
-                <Separator />
-                <span>Columns: Task frequency</span>
-                <Separator />
-                <InlineAction
-                  label="Customize"
-                  onClick={() => handleTableAction(tableCustomizeCursorIndex)}
-                  active={activeTableCursorIndex === tableCustomizeCursorIndex}
-                  cursorOutside
-                />
-              </div>
+              {tableTooltip && typeof document !== 'undefined'
+                ? createPortal(
+                    <div
+                      className="pointer-events-none fixed z-50 rounded-none border border-border bg-background px-2 py-1 text-[10px] font-medium text-muted-foreground"
+                      style={{
+                        left: tableTooltip.x + TABLE_TOOLTIP_OFFSET_X,
+                        top: tableTooltip.y + TABLE_TOOLTIP_OFFSET_Y,
+                      }}
+                      aria-hidden="true"
+                    >
+                      <TooltipTypewriterText
+                        key={`${tableTooltip.key}-${tableTooltip.text}`}
+                        text={tableTooltip.text}
+                      />
+                    </div>,
+                    document.body,
+                  )
+                : null}
+
+              {canShowTableScrollControl ? (
+                <div className="mt-2 w-full max-w-[640px] text-[10px] text-muted-foreground max-[735px]:max-w-none max-[735px]:w-[calc(100%+3rem)] max-[735px]:-mr-12 max-[735px]:pr-12 max-sm:w-[calc(100%+1.5rem)] max-sm:-mr-6 max-sm:pr-6">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block size-[12px] border border-border bg-hatch" />
+                      Not Possible
+                    </span>
+
+                    <div className="relative inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTableCursorIndex(tableScrollCursorIndex)
+                          scrollTableByStep(-1)
+                        }}
+                        onMouseEnter={() => setTableCursorIndex(tableScrollCursorIndex)}
+                        disabled={!tableCanScrollLeft}
+                        className="focus-visible:outline-none disabled:pointer-events-none disabled:opacity-30"
+                      >
+                        <kbd className={tableScrollKeycapClass(tableScrollLeftKeyActive, !tableCanScrollLeft)}>
+                          🡨
+                        </kbd>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTableCursorIndex(tableScrollCursorIndex)}
+                        onMouseEnter={() => setTableCursorIndex(tableScrollCursorIndex)}
+                        className={cn(
+                          interactiveBaseClass,
+                          'cursor-pointer',
+                          activeTableCursorIndex === tableScrollCursorIndex &&
+                            'motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100',
+                          activeTableCursorIndex === tableScrollCursorIndex
+                            ? 'font-bold text-foreground'
+                            : 'font-medium text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        Scroll
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTableCursorIndex(tableScrollCursorIndex)
+                          scrollTableByStep(1)
+                        }}
+                        onMouseEnter={() => setTableCursorIndex(tableScrollCursorIndex)}
+                        disabled={!tableCanScrollRight}
+                        className="focus-visible:outline-none disabled:pointer-events-none disabled:opacity-30"
+                      >
+                        <kbd className={tableScrollKeycapClass(tableScrollRightKeyActive, !tableCanScrollRight)}>
+                          🡪
+                        </kbd>
+                      </button>
+                      <TerminalCursor
+                        active={activeTableCursorIndex === tableScrollCursorIndex}
+                        className="absolute left-full top-1/2 ml-1 -translate-y-1/2"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-2 flex flex-col items-start gap-y-2">
+                    <span className="relative inline-flex items-center">
+                      <span>Rows: Time saved per task (</span>
+                      <button
+                        type="button"
+                        onClick={() => handleTableAction(tableRowsEditCursorIndex)}
+                        className={cn(
+                          interactiveBaseClass,
+                          activeTableCursorIndex === tableRowsEditCursorIndex
+                            ? 'font-bold text-foreground motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100'
+                            : 'font-medium text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        Edit
+                      </button>
+                      <span>)</span>
+                      <TerminalCursor
+                        active={activeTableCursorIndex === tableRowsEditCursorIndex}
+                        className="absolute left-full ml-1 top-1/2 -translate-y-1/2"
+                      />
+                    </span>
+                    <span className="relative inline-flex items-center">
+                      <span>Columns: Task frequency (</span>
+                      <button
+                        type="button"
+                        onClick={() => handleTableAction(tableColumnsEditCursorIndex)}
+                        className={cn(
+                          interactiveBaseClass,
+                          activeTableCursorIndex === tableColumnsEditCursorIndex
+                            ? 'font-bold text-foreground motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100'
+                            : 'font-medium text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        Edit
+                      </button>
+                      <span>)</span>
+                      <TerminalCursor
+                        active={activeTableCursorIndex === tableColumnsEditCursorIndex}
+                        className="absolute left-full ml-1 top-1/2 -translate-y-1/2"
+                      />
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 flex max-w-[640px] flex-col items-start gap-y-2 text-[10px] text-muted-foreground min-[736px]:h-3 min-[736px]:flex-row min-[736px]:flex-wrap min-[736px]:items-center min-[736px]:gap-x-4 min-[736px]:gap-y-2 min-[736px]:pl-[46px]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="inline-block size-[12px] border border-border bg-hatch" />
+                    Not Possible
+                  </span>
+                  <Separator className="hidden min-[736px]:block" />
+                  <span className="relative inline-flex items-center">
+                    <span>Rows: Time saved per task (</span>
+                    <button
+                      type="button"
+                      onClick={() => handleTableAction(tableRowsEditCursorIndex)}
+                      className={cn(
+                        interactiveBaseClass,
+                        activeTableCursorIndex === tableRowsEditCursorIndex
+                          ? 'font-bold text-foreground motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100'
+                          : 'font-medium text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      Edit
+                    </button>
+                    <span>)</span>
+                    <TerminalCursor
+                      active={activeTableCursorIndex === tableRowsEditCursorIndex}
+                      className="absolute left-full ml-1 top-1/2 -translate-y-1/2"
+                    />
+                  </span>
+                  <Separator className="hidden min-[736px]:block" />
+                  <span className="relative inline-flex items-center">
+                    <span>Columns: Task frequency (</span>
+                    <button
+                      type="button"
+                      onClick={() => handleTableAction(tableColumnsEditCursorIndex)}
+                      className={cn(
+                        interactiveBaseClass,
+                        activeTableCursorIndex === tableColumnsEditCursorIndex
+                          ? 'font-bold text-foreground motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100'
+                          : 'font-medium text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      Edit
+                    </button>
+                    <span>)</span>
+                    <TerminalCursor
+                      active={activeTableCursorIndex === tableColumnsEditCursorIndex}
+                      className="absolute left-full ml-1 top-1/2 -translate-y-1/2"
+                    />
+                  </span>
+                </div>
+              )}
 
               {calendarBasis === 'workdays' ? (
                 <p className="mt-2 text-[10px] text-muted-foreground">
@@ -1980,8 +2668,10 @@ export function AutomationROIPage() {
                   ? activeTableCursorIndex - tableFooterStartIndex
                   : -1
               }
-              onAction={(index) => handleTableAction(tableFooterStartIndex + index)}
-              autoHideKeyCommands={autoHideKeyCommands}
+              onAction={handleFooterAction}
+              onToggleCommands={(nextVisible) => setAutoHideKeyCommands(nextVisible)}
+              onCommandToggleAvailabilityChange={setTableFooterCommandToggleAvailable}
+              keyboardCommandsEnabled={autoHideKeyCommands}
               keyboardCommandsVisible
             />
           </motion.section>
@@ -2013,55 +2703,84 @@ export function AutomationROIPage() {
                       animateOnlyOnMount
                     />
                   }
-                  onClick={() => setView(settingsReturnView)}
+                  onClick={navigateBackFromSettings}
                   active={settingsIndex === settingsBackIndex}
                 />
               </div>
 
-              <div className="text-[12px] leading-6">
+              <div className="flex flex-col gap-2 text-[12px]">
                 {settingsOptions.map((option, index) => {
                   const optionIndex = settingsOptionStartIndex + index
+                  const isResetOption = option.id === 'reset'
 
                   return (
-                    <div key={option.id} className="flex items-center gap-2">
-                      <div className="w-3 text-foreground">
+                    <div
+                      key={option.id}
+                      className={cn(
+                        'grid grid-cols-[12px_minmax(0,1fr)] items-start gap-2',
+                        isResetOption && 'mt-6',
+                      )}
+                    >
+                      <div className="w-3 shrink-0 self-start translate-y-[1.5px] text-foreground leading-none">
                         {optionIndex === settingsIndex ? '🡲' : '\u00A0'}
                       </div>
                       <button
                         type="button"
                         className={cn(
-                          'cursor-pointer text-left leading-6 outline-none transition-colors',
-                          optionIndex === settingsIndex
-                            ? 'font-bold text-foreground'
-                            : 'font-medium text-muted-foreground hover:text-foreground',
+                          isResetOption
+                            ? cn(
+                                interactiveBaseClass,
+                                'inline-flex w-fit cursor-pointer items-center text-left outline-none transition-colors',
+                                optionIndex === settingsIndex &&
+                                  'motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100',
+                                optionIndex === settingsIndex
+                                  ? 'font-bold text-foreground'
+                                  : 'font-medium text-muted-foreground hover:text-foreground',
+                              )
+                            : cn(
+                                'w-full cursor-pointer text-left outline-none transition-colors',
+                                optionIndex === settingsIndex
+                                  ? 'font-bold text-foreground'
+                                  : 'font-medium text-muted-foreground hover:text-foreground',
+                              ),
                         )}
                         onMouseEnter={() => setSettingsIndex(optionIndex)}
                         onClick={() => activateSettingsOption(index)}
                       >
-                        <span
-                          className={cn(
-                            option.value
-                              ? 'grid grid-cols-[24ch_1fr] items-baseline gap-x-8 leading-normal'
-                              : 'block',
-                          )}
-                        >
-                          <span>
-                            <MenuOptionTypewriter
-                              text={option.label}
-                              startDelayMs={optionIndex * MENU_OPTION_STAGGER_MS}
-                              animateOnlyOnMount
-                            />
-                          </span>
-                          {option.value ? (
-                            <span>
+                        {isResetOption ? (
+                          <MenuOptionTypewriter
+                            text={option.label}
+                            startDelayMs={optionIndex * MENU_OPTION_STAGGER_MS}
+                            animateOnlyOnMount
+                          />
+                        ) : (
+                          <span
+                            className={cn(
+                              option.value
+                                ? 'grid grid-cols-[24ch_minmax(0,1fr)] items-start gap-x-8'
+                                : 'block',
+                            )}
+                            style={{ lineHeight: 'normal' }}
+                          >
+                            <span style={{ lineHeight: 'normal' }}>
                               <MenuOptionTypewriter
-                                text={option.value}
+                                text={option.label}
                                 startDelayMs={optionIndex * MENU_OPTION_STAGGER_MS}
                                 animateOnlyOnMount
                               />
                             </span>
+                            {option.value ? (
+                              <span style={{ lineHeight: 'normal' }}>
+                              <MenuOptionTypewriter
+                                text={option.value}
+                                startDelayMs={optionIndex * MENU_OPTION_STAGGER_MS}
+                                animateOnlyOnMount
+                                reserveLayout
+                              />
+                            </span>
                           ) : null}
-                        </span>
+                          </span>
+                        )}
                       </button>
                     </div>
                   )
@@ -2092,37 +2811,43 @@ export function AutomationROIPage() {
               <div className="text-[12px] leading-6">
                 {menuLabels.map((label, index) => (
                   <div key={`${label}-${index}`} className="flex items-center gap-2">
-                    <div className="w-3 text-foreground">{index === menuIndex ? '🡲' : '\u00A0'}</div>
+                    <div className="w-3 text-foreground">
+                      {menuCursorVisible && index === menuIndex ? '🡲' : '\u00A0'}
+                    </div>
                     <button
                       type="button"
                       className={cn(
                         'cursor-pointer text-left leading-6 outline-none transition-colors',
                         index === menuIndex
                           ? 'font-bold text-foreground'
-                          : index === menuSelectedIndex
-                          ? 'font-bold text-foreground'
                           : 'font-medium text-muted-foreground hover:text-foreground',
                       )}
                       onMouseEnter={() => setMenuIndex(index)}
                       onClick={() => selectMenuItem(index)}
                     >
+                      {(() => {
+                        const optionLabel =
+                          index === menuSelectedIndex ? `${label} (current)` : label
+                        return (
                       <MenuOptionTypewriter
-                        text={label}
+                            text={optionLabel}
                         startDelayMs={index * MENU_OPTION_STAGGER_MS}
                       />
+                        )
+                      })()}
                     </button>
                   </div>
                 ))}
 
                 <div className="flex items-center gap-2">
-                  <div className="w-3 text-foreground">{menuIndex === menuNewOptionIndex ? '🡲' : '\u00A0'}</div>
+                  <div className="w-3 text-foreground">
+                    {menuCursorVisible && menuIndex === menuNewOptionIndex ? '🡲' : '\u00A0'}
+                  </div>
                   <button
                     type="button"
                     className={cn(
                       'cursor-pointer text-left leading-6 outline-none transition-colors',
                       menuIndex === menuNewOptionIndex
-                        ? 'font-bold text-foreground'
-                        : menuSelectedIndex === menuNewOptionIndex
                         ? 'font-bold text-foreground'
                         : 'font-medium text-muted-foreground hover:text-foreground',
                     )}
@@ -2139,7 +2864,9 @@ export function AutomationROIPage() {
                 <div className="h-4" />
 
                 <div className="flex items-center gap-2">
-                  <div className="w-3 text-foreground">{menuIndex === menuCancelIndex ? '🡲' : '\u00A0'}</div>
+                  <div className="w-3 text-foreground">
+                    {menuCursorVisible && menuIndex === menuCancelIndex ? '🡲' : '\u00A0'}
+                  </div>
                     <button
                       type="button"
                       className={cn(
@@ -2166,139 +2893,151 @@ export function AutomationROIPage() {
           </motion.section>
         ) : null}
 
-        {view === 'customize' ? (
+        {isTableEditMenuView ? (
           <motion.section
-            key="customize"
+            key={view}
             variants={activeScreenVariants}
             initial="hidden"
             animate="visible"
             exit="exit"
             className="flex min-h-[calc(100vh-48px)] sm:min-h-[calc(100vh-96px)] w-full max-w-[1200px] flex-col"
-            onKeyDown={handleCustomizeKeyDown}
           >
-            <TerminalHeader title="Customize table" />
+            <TerminalHeader title={tableEditMenuTitle} />
 
             <div
               className="grow max-w-[640px] outline-none"
               tabIndex={0}
-              data-screen-autofocus-view="customize"
+              data-screen-autofocus-view={view}
+              onKeyDown={handleTableEditMenuKeyDown}
             >
-              <div className="space-y-12">
-                <div>
-                  <p className="mb-6 text-[12px] font-bold text-foreground">
-                    <MenuOptionTypewriter text="Columns: Task frequency" startDelayMs={0} />
-                  </p>
-                  <TerminalChoiceList
-                    items={columnItems.map((item) =>
-                      item.kind === 'new-column'
-                        ? 'New column…'
-                        : item.column.isCustom
-                          ? `${formatFrequencyLong(item.column)} (Edit)`
-                          : formatFrequencyLong(item.column),
-                    )}
-                    active={
-                      customizeSection === 'columns'
-                        ? clampedCustomizeColumnCursorIndex
-                        : -1
-                    }
-                    selected={clampedCustomizeColumnSelectedIndex}
-                    delayOffsetMs={MENU_OPTION_STAGGER_MS}
-                    onHover={(index) => {
-                      setCustomizeSection('columns')
-                      setCustomizeColumnCursorIndex(index)
-                    }}
-                    onActivate={(index) => {
-                      setCustomizeSection('columns')
-                      setCustomizeColumnCursorIndex(index)
-                      setCustomizeColumnSelectedIndex(index)
-                      activateCustomizeItem('columns', index)
-                    }}
+              <div className="text-[12px]">
+                <p className="mb-6 font-bold leading-6 text-foreground">
+                  <MenuOptionTypewriter
+                    text={activeTableEditMenuKind === 'rows' ? 'Time saved per task' : 'Task frequency'}
+                    startDelayMs={0}
                   />
-                </div>
+                </p>
 
-                <div>
-                  <p className="mb-6 text-[12px] font-bold text-foreground">
-                    <MenuOptionTypewriter
-                      text="Rows: Time saved per task"
-                      startDelayMs={(columnItems.length + 2) * MENU_OPTION_STAGGER_MS}
-                    />
-                  </p>
-                  <TerminalChoiceList
-                    items={rowItems.map((item) =>
-                      item.kind === 'new-row'
-                        ? 'New row…'
-                        : item.row.isCustom
-                          ? `${item.row.label} (Edit)`
-                          : item.row.label,
-                    )}
-                    active={
-                      customizeSection === 'rows' ? clampedCustomizeRowCursorIndex : -1
-                    }
-                    selected={clampedCustomizeRowSelectedIndex}
-                    delayOffsetMs={(columnItems.length + 3) * MENU_OPTION_STAGGER_MS}
-                    onHover={(index) => {
-                      setCustomizeSection('rows')
-                      setCustomizeRowCursorIndex(index)
-                    }}
-                    onActivate={(index) => {
-                      setCustomizeSection('rows')
-                      setCustomizeRowCursorIndex(index)
-                      setCustomizeRowSelectedIndex(index)
-                      activateCustomizeItem('rows', index)
-                    }}
-                  />
-                </div>
-              </div>
+                <div className="leading-6">
+                  {tableEditMenuItems.map((item, index) => {
+                    const isActive = tableEditMenuIndex === index
+                    const showCursor = tableEditMenuCursorVisible && isActive
+                    const shouldAnimateIntro = !tableEditMenuCursorVisible
+                    const isDefault =
+                      item.kind === 'default-row' || item.kind === 'default-column'
+                    const isNew = item.kind === 'new'
+                    const isCancel = item.kind === 'cancel'
+                    const isCustomItem =
+                      item.kind === 'custom-row' || item.kind === 'custom-column'
+                    const itemKey =
+                      item.kind === 'default-row'
+                        ? `default-row-${item.row.id}`
+                        : item.kind === 'default-column'
+                          ? `default-column-${item.column.id}`
+                          : item.kind === 'custom-row'
+                            ? `custom-row-${item.row.id}`
+                            : item.kind === 'custom-column'
+                              ? `custom-column-${item.column.id}`
+                              : item.kind
+                    const label =
+                      item.kind === 'default-row'
+                        ? formatLongDuration(item.row.seconds)
+                        : item.kind === 'default-column'
+                          ? formatFrequencyLong(item.column)
+                          : item.kind === 'custom-row'
+                            ? formatLongDuration(item.row.seconds)
+                            : item.kind === 'custom-column'
+                              ? formatFrequencyLong(item.column)
+                              : isNew
+                                ? tableEditMenuNewLabel
+                                : tableEditMenuExitLabel
+                    const defaultStatus =
+                      item.kind === 'default-row'
+                        ? enabledDefaultRowIds.has(item.row.id)
+                          ? 'On'
+                          : 'Off'
+                        : item.kind === 'default-column'
+                          ? enabledDefaultColumnIds.has(item.column.id)
+                            ? 'On'
+                            : 'Off'
+                          : ''
+                    const rowTopSpacingClass =
+                      index === tableEditDefaultItemCount
+                        ? 'mt-6'
+                        : isCancel
+                          ? 'mt-8'
+                          : ''
 
-              <div className="mt-12 pl-5 text-[12px] space-y-3">
-                {hasCustomizePendingChanges ? (
-                  <InlineAction
-                    label={
-                      <MenuOptionTypewriter
-                        text="Save changes"
-                        startDelayMs={
-                          (columnItems.length + rowItems.length + 5) * MENU_OPTION_STAGGER_MS
-                        }
-                      />
-                    }
-                    active={
-                      customizeSection === 'actions' &&
-                      customizeActionItems[clampedCustomizeActionCursorIndex] === 'save'
-                    }
-                    onMouseEnter={() => {
-                      setCustomizeSection('actions')
-                      setCustomizeActionCursorIndex(
-                        Math.max(0, customizeActionItems.indexOf('save')),
-                      )
-                    }}
-                    onClick={() => setView('table')}
-                  />
-                ) : null}
-                <InlineAction
-                  label={
-                    <MenuOptionTypewriter
-                      text="Cancel"
-                      startDelayMs={
-                        (columnItems.length + rowItems.length + (hasCustomizePendingChanges ? 6 : 5)) *
-                        MENU_OPTION_STAGGER_MS
-                      }
-                    />
-                    }
-                  active={
-                    customizeSection === 'actions' &&
-                    customizeActionItems[clampedCustomizeActionCursorIndex] === 'cancel'
-                  }
-                  onMouseEnter={() => {
-                    setCustomizeSection('actions')
-                    setCustomizeActionCursorIndex(
-                      Math.max(0, customizeActionItems.indexOf('cancel')),
+                    return (
+                      <div key={itemKey} className={cn('flex items-center gap-2', rowTopSpacingClass)}>
+                        <div className="w-3 text-foreground">{showCursor ? '🡲' : '\u00A0'}</div>
+
+                        {isCancel ? (
+                          <button
+                            type="button"
+                            className={cn(
+                              interactiveBaseClass,
+                              'inline-flex w-fit cursor-pointer items-center text-left align-top outline-none',
+                              isActive &&
+                                'motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100',
+                              isActive
+                                ? 'font-bold text-foreground'
+                                : 'font-medium text-muted-foreground hover:text-foreground',
+                            )}
+                            onMouseEnter={() => setTableEditMenuIndex(index)}
+                            onClick={() => activateTableEditMenuItem(index)}
+                          >
+                            <MenuOptionTypewriter
+                              text={label}
+                              startDelayMs={shouldAnimateIntro ? index * MENU_OPTION_STAGGER_MS : 0}
+                            />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className={cn(
+                              'grid w-full max-w-[260px] cursor-pointer grid-cols-[1fr_56px] items-baseline gap-x-8 text-left outline-none transition-colors',
+                              isActive
+                                ? 'font-bold text-foreground'
+                                : 'font-medium text-muted-foreground hover:text-foreground',
+                            )}
+                            onMouseEnter={() => setTableEditMenuIndex(index)}
+                            onClick={() => activateTableEditMenuItem(index)}
+                          >
+                            <span>
+                              <MenuOptionTypewriter
+                                text={label}
+                                startDelayMs={shouldAnimateIntro ? index * MENU_OPTION_STAGGER_MS : 0}
+                              />
+                            </span>
+                            <span className="justify-self-start">
+                              {isDefault ? (
+                                <MenuOptionTypewriter
+                                  key={`${itemKey}-${defaultStatus}-${tableEditMenuCursorVisible ? 'active' : 'intro'}`}
+                                  text={defaultStatus}
+                                  startDelayMs={
+                                    shouldAnimateIntro ? index * MENU_OPTION_STAGGER_MS : 0
+                                  }
+                                />
+                              ) : isCustomItem && isActive ? (
+                                <span
+                                  className={cn(
+                                    interactiveBaseClass,
+                                    'font-bold text-foreground motion-safe:after:origin-left motion-safe:after:scale-x-100 motion-reduce:after:opacity-100',
+                                  )}
+                                >
+                                  <MenuOptionTypewriter text="Remove" startDelayMs={0} />
+                                </span>
+                              ) : null}
+                            </span>
+                          </button>
+                        )}
+                      </div>
                     )
-                  }}
-                  onClick={() => setView('table')}
-                />
+                  })}
+                </div>
               </div>
             </div>
-
           </motion.section>
         ) : null}
 
@@ -2469,7 +3208,7 @@ export function AutomationROIPage() {
             className="flex min-h-[calc(100vh-48px)] sm:min-h-[calc(100vh-96px)] w-full max-w-[1200px] flex-col"
             onKeyDown={handleAddColumnKeyDown}
           >
-            <TerminalHeader title={editingColumnId ? 'Edit table column' : 'Add table column'} />
+            <TerminalHeader title="Add table column" />
 
             <div className="grow max-w-[640px] text-[12px]">
               <form
@@ -2513,22 +3252,6 @@ export function AutomationROIPage() {
                     buttonRef={addColumnCancelRef}
                     onMouseEnter={() => setAddColumnCursorIndex(1)}
                   />
-                  {editingColumnId ? (
-                    <div>
-                      <InlineAction
-                        label={
-                          <MenuOptionTypewriter
-                            text="Delete column"
-                            startDelayMs={MENU_OPTION_STAGGER_MS * 2}
-                          />
-                        }
-                        onClick={deleteEditingColumn}
-                        active={addColumnCursorIndex === 2}
-                        buttonRef={addColumnDeleteRef}
-                        onMouseEnter={() => setAddColumnCursorIndex(2)}
-                      />
-                    </div>
-                  ) : null}
                 </div>
               </form>
 
@@ -2573,7 +3296,7 @@ export function AutomationROIPage() {
             className="flex min-h-[calc(100vh-48px)] sm:min-h-[calc(100vh-96px)] w-full max-w-[1200px] flex-col"
             onKeyDown={handleAddRowKeyDown}
           >
-            <TerminalHeader title={editingRowId ? 'Edit table row' : 'Add table row'} />
+            <TerminalHeader title="Add table row" />
 
             <div className="grow max-w-[640px] text-[12px]">
               <form
@@ -2617,22 +3340,6 @@ export function AutomationROIPage() {
                     buttonRef={addRowCancelRef}
                     onMouseEnter={() => setAddRowCursorIndex(1)}
                   />
-                  {editingRowId ? (
-                    <div>
-                      <InlineAction
-                        label={
-                          <MenuOptionTypewriter
-                            text="Delete row"
-                            startDelayMs={MENU_OPTION_STAGGER_MS * 2}
-                          />
-                        }
-                        onClick={deleteEditingRow}
-                        active={addRowCursorIndex === 2}
-                        buttonRef={addRowDeleteRef}
-                        onMouseEnter={() => setAddRowCursorIndex(2)}
-                      />
-                    </div>
-                  ) : null}
                 </div>
               </form>
 
@@ -2742,14 +3449,65 @@ function TypewriterResultText({
   return <span className="whitespace-nowrap">{text.slice(0, visibleLength)}</span>
 }
 
+function TooltipTypewriterText({
+  text,
+}: {
+  text: string
+}) {
+  const prefersReducedMotion = useReducedMotion()
+  const [visibleLength, setVisibleLength] = useState(0)
+
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      return
+    }
+
+    let timer = 0
+    let cancelled = false
+
+    if (text.length === 0) {
+      return
+    }
+
+    const step = (index: number) => {
+      if (cancelled) {
+        return
+      }
+
+      setVisibleLength(index)
+
+      if (index >= text.length) {
+        return
+      }
+
+      timer = window.setTimeout(() => step(index + 1), 16)
+    }
+
+    timer = window.setTimeout(() => step(1), 45)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [prefersReducedMotion, text])
+
+  if (prefersReducedMotion) {
+    return <span>{text}</span>
+  }
+
+  return <span>{text.slice(0, visibleLength)}</span>
+}
+
 function MenuOptionTypewriter({
   text,
   startDelayMs,
   animateOnlyOnMount = false,
+  reserveLayout = false,
 }: {
   text: string
   startDelayMs: number
   animateOnlyOnMount?: boolean
+  reserveLayout?: boolean
 }) {
   const prefersReducedMotion = useReducedMotion()
   const [visibleLength, setVisibleLength] = useState(0)
@@ -2782,7 +3540,11 @@ function MenuOptionTypewriter({
       timer = window.setTimeout(() => step(index + 1), MENU_OPTION_CHAR_MS)
     }
 
-    timer = window.setTimeout(() => step(1), startDelayMs)
+    if (startDelayMs <= 0) {
+      step(1)
+    } else {
+      timer = window.setTimeout(() => step(1), startDelayMs)
+    }
 
     return () => {
       cancelled = true
@@ -2792,6 +3554,15 @@ function MenuOptionTypewriter({
 
   if (!shouldAnimate) {
     return <span>{text}</span>
+  }
+
+  if (reserveLayout) {
+    return (
+      <span className="relative block">
+        <span className="invisible block">{text}</span>
+        <span className="absolute inset-0 block">{text.slice(0, visibleLength)}</span>
+      </span>
+    )
   }
 
   return <span>{text.slice(0, visibleLength)}</span>
@@ -2806,6 +3577,9 @@ function RowCells({
   customDaysPerYear,
   displayMode,
   significantDigits,
+  onApproximateCellEnter,
+  onApproximateCellMove,
+  onApproximateCellLeave,
 }: {
   row: SavingsRow
   columns: FrequencyColumn[]
@@ -2815,15 +3589,23 @@ function RowCells({
   customDaysPerYear: number
   displayMode: (typeof DEFAULT_STATE)['displayMode']
   significantDigits: number
+  onApproximateCellEnter: (
+    key: string,
+    text: string,
+    event: ReactMouseEvent<HTMLElement>,
+  ) => void
+  onApproximateCellMove: (key: string, event: ReactMouseEvent<HTMLElement>) => void
+  onApproximateCellLeave: (key: string) => void
 }) {
   return (
     <>
-      <div className="flex h-6 items-center justify-end pr-2 text-[10px] font-bold text-foreground">
+      <div className="sticky left-0 z-10 flex h-6 cursor-default select-none items-center justify-end border-r border-border bg-background pr-2 text-[10px] font-bold text-foreground">
         {row.label}
       </div>
       {columns.map((column, columnIndex) => {
         const borderClass = cn(
-          'border-l border-t border-border',
+          'border-t border-border',
+          columnIndex > 0 && 'border-l',
           columnIndex === columns.length - 1 && 'border-r',
           isLastRow && 'border-b',
         )
@@ -2834,7 +3616,7 @@ function RowCells({
             <div
               key={`${row.id}-${column.id}`}
               className={cn(
-                'flex h-6 items-center justify-center bg-hatch',
+                'flex h-6 cursor-default select-none items-center justify-center bg-hatch',
                 borderClass,
               )}
             />
@@ -2850,10 +3632,9 @@ function RowCells({
             <div
               key={`${row.id}-${column.id}`}
               className={cn(
-                'flex h-6 items-center justify-center text-[10px] text-muted-foreground',
+                'flex h-6 cursor-default select-none items-center justify-center text-[10px] text-muted-foreground',
                 borderClass,
               )}
-              title={formatted.ariaLabel}
             >
               <div className="whitespace-nowrap text-center leading-[14px]">
                 {formatted.tokens.map((token, index) => (
@@ -2868,15 +3649,30 @@ function RowCells({
         }
 
         const compact = formatCompactCellDisplay(seconds)
+        const cellKey = `${row.id}-${column.id}`
+        const tooltipText = compact.approx
+          ? formatPreciseTooltipText(seconds)
+          : formatNonApproximateCellTooltipText(seconds, compact)
+        const hasCellTooltip = tooltipText !== null
 
         return (
           <div
-            key={`${row.id}-${column.id}`}
-            className={cn(
-              'flex h-6 items-center justify-center text-[10px] text-muted-foreground',
-              borderClass,
-            )}
-            title={`${compact.approx ? 'approximately ' : ''}${compact.value} ${compact.unit}`}
+            key={cellKey}
+              className={cn(
+                'flex h-6 cursor-default select-none items-center justify-center text-[10px] text-muted-foreground',
+                borderClass,
+              )}
+            onMouseEnter={
+              hasCellTooltip
+                ? (event) => onApproximateCellEnter(cellKey, tooltipText, event)
+                : undefined
+            }
+            onMouseMove={
+              hasCellTooltip
+                ? (event) => onApproximateCellMove(cellKey, event)
+                : undefined
+            }
+            onMouseLeave={hasCellTooltip ? () => onApproximateCellLeave(cellKey) : undefined}
           >
             <span className="inline-flex items-baseline gap-0.5 whitespace-nowrap text-center leading-[14px]">
               {compact.approx ? <span>~</span> : null}
@@ -2887,55 +3683,6 @@ function RowCells({
         )
       })}
     </>
-  )
-}
-
-function TerminalChoiceList({
-  items,
-  active,
-  selected,
-  delayOffsetMs = 0,
-  onHover,
-  onActivate,
-}: {
-  items: string[]
-  active: number
-  selected: number
-  delayOffsetMs?: number
-  onHover: (index: number) => void
-  onActivate: (index: number) => void
-}) {
-  return (
-    <div className="flex gap-2 text-[12px] leading-6">
-      <div className="w-3 text-foreground">
-        {items.map((_, index) => (
-          <div key={String(index)}>{index === active ? '🡲' : '\u00A0'}</div>
-        ))}
-      </div>
-      <div className="text-muted-foreground">
-        {items.map((item, index) => (
-          <button
-            key={`${item}-${index}`}
-            type="button"
-            className={cn(
-              'block cursor-pointer text-left leading-6 outline-none transition-colors',
-              index === active
-                ? 'font-bold text-foreground'
-                : index === selected
-                ? 'font-bold text-foreground'
-                : 'font-medium text-muted-foreground hover:text-foreground',
-            )}
-            onMouseEnter={() => onHover(index)}
-            onClick={() => onActivate(index)}
-          >
-            <MenuOptionTypewriter
-              text={item}
-              startDelayMs={delayOffsetMs + index * MENU_OPTION_STAGGER_MS}
-            />
-          </button>
-        ))}
-      </div>
-    </div>
   )
 }
 
@@ -3092,6 +3839,7 @@ function TerminalCursor({
 }) {
   return (
     <span
+      data-terminal-cursor="true"
       className={cn(
         'inline-block h-[12px] w-[8px] bg-foreground transition-opacity',
         active ? 'opacity-100 animate-[terminal-blink_1s_steps(1,end)_infinite]' : 'opacity-0',
@@ -3102,12 +3850,219 @@ function TerminalCursor({
   )
 }
 
-function TerminalHeader({ title }: { title: string }) {
+function TerminalHeader({
+  title,
+  typewriter = false,
+}: {
+  title: string
+  typewriter?: boolean
+}) {
   return (
     <header className="mb-12 w-full max-w-[640px]">
-      <h1 className="m-0 text-[12px] font-bold leading-none text-foreground">{title}</h1>
+      <h1 className="m-0 text-[12px] font-bold leading-none text-foreground">
+        {typewriter ? <TypedWords text={title} /> : title}
+      </h1>
     </header>
   )
+}
+
+function parseNavigationStateFromPath(pathname: string): NavigationUrlState {
+  const segments = pathname.split('/').filter(Boolean)
+  const state: NavigationUrlState = {
+    view: 'home',
+    menuReturnView: 'home',
+    settingsReturnView: 'home',
+    tableEditMenuKind: 'columns',
+    menuCustomKind: 'frequency',
+  }
+
+  const first = segments[0]
+  const second = segments[1]
+  const third = segments[2]
+
+  if (!first) {
+    return state
+  }
+
+  if (first === 'settings') {
+    state.view = 'settings'
+    return state
+  }
+
+  if (first === 'home' || first === 'table') {
+    const baseView: BaseView = first
+    state.menuReturnView = baseView
+    state.settingsReturnView = baseView
+
+    if (!second) {
+      state.view = baseView
+      return state
+    }
+
+    if (second === 'settings') {
+      state.view = 'settings'
+      return state
+    }
+
+    if (baseView === 'table' && second === 'rows') {
+      state.tableEditMenuKind = 'rows'
+      state.view = third === 'add' ? 'add-row' : 'menu-edit-rows'
+      return state
+    }
+
+    if (baseView === 'table' && second === 'columns') {
+      state.tableEditMenuKind = 'columns'
+      state.view = third === 'add' ? 'add-column' : 'menu-edit-columns'
+      return state
+    }
+
+    if (isMenuId(second)) {
+      state.menuCustomKind = menuCustomKindFromMenuId(second)
+      state.view = third === 'add' ? 'add-menu-option' : menuViewFromMenuId(second)
+      return state
+    }
+
+    state.view = baseView
+    return state
+  }
+
+  if (isMenuId(first)) {
+    state.menuReturnView = 'home'
+    state.menuCustomKind = menuCustomKindFromMenuId(first)
+    state.view = second === 'add' ? 'add-menu-option' : menuViewFromMenuId(first)
+    return state
+  }
+
+  return state
+}
+
+function buildNavigationPath(state: NavigationUrlState) {
+  if (state.view === 'home') {
+    return '/'
+  }
+
+  if (state.view === 'table') {
+    return '/table'
+  }
+
+  if (state.view === 'settings') {
+    return '/settings'
+  }
+
+  if (state.view === 'menu-frequency') {
+    return `/${state.menuReturnView}/${MENU_ID_FREQUENCY}`
+  }
+
+  if (state.view === 'menu-time') {
+    return `/${state.menuReturnView}/${MENU_ID_SAVINGS}`
+  }
+
+  if (state.view === 'menu-lifetime') {
+    return `/${state.menuReturnView}/${MENU_ID_PERIOD}`
+  }
+
+  if (state.view === 'add-menu-option') {
+    return `/${state.menuReturnView}/${menuIdFromMenuCustomKind(state.menuCustomKind)}/add`
+  }
+
+  if (state.view === 'menu-edit-rows') {
+    return '/table/rows'
+  }
+
+  if (state.view === 'menu-edit-columns') {
+    return '/table/columns'
+  }
+
+  if (state.view === 'add-row') {
+    return '/table/rows/add'
+  }
+
+  return '/table/columns/add'
+}
+
+function writeNavigationPathToUrl(
+  nextPath: string,
+  mode: 'push' | 'replace',
+  navigationIndex: number,
+) {
+  const params = new URLSearchParams(window.location.search)
+  params.delete('v')
+  params.delete('mr')
+  params.delete('sr')
+  params.delete('tk')
+  params.delete('mk')
+  const nextSearch = params.toString()
+  const nextUrl = `${nextPath}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
+  const currentState =
+    typeof window.history.state === 'object' && window.history.state !== null
+      ? (window.history.state as Record<string, unknown>)
+      : {}
+  const nextState: Record<string, unknown> = {
+    ...currentState,
+    [NAVIGATION_HISTORY_STATE_KEY]: navigationIndex,
+  }
+  if (mode === 'push') {
+    window.history.pushState(nextState, '', nextUrl)
+  } else {
+    window.history.replaceState(nextState, '', nextUrl)
+  }
+
+  return nextPath
+}
+
+function getNavigationHistoryIndex(state: unknown) {
+  if (typeof state !== 'object' || state === null) {
+    return 0
+  }
+
+  const candidate = (state as Record<string, unknown>)[NAVIGATION_HISTORY_STATE_KEY]
+  return typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0
+    ? Math.floor(candidate)
+    : 0
+}
+
+function isMenuId(value: string | undefined): value is 'frequency' | 'savings' | 'period' {
+  return (
+    value === MENU_ID_FREQUENCY ||
+    value === MENU_ID_SAVINGS ||
+    value === MENU_ID_PERIOD
+  )
+}
+
+function menuCustomKindFromMenuId(menuId: 'frequency' | 'savings' | 'period'): MenuCustomKind {
+  if (menuId === MENU_ID_FREQUENCY) {
+    return 'frequency'
+  }
+
+  if (menuId === MENU_ID_SAVINGS) {
+    return 'time'
+  }
+
+  return 'lifetime'
+}
+
+function menuIdFromMenuCustomKind(kind: MenuCustomKind) {
+  if (kind === 'frequency') {
+    return MENU_ID_FREQUENCY
+  }
+
+  if (kind === 'time') {
+    return MENU_ID_SAVINGS
+  }
+
+  return MENU_ID_PERIOD
+}
+
+function menuViewFromMenuId(menuId: 'frequency' | 'savings' | 'period'): View {
+  if (menuId === MENU_ID_FREQUENCY) {
+    return 'menu-frequency'
+  }
+
+  if (menuId === MENU_ID_SAVINGS) {
+    return 'menu-time'
+  }
+
+  return 'menu-lifetime'
 }
 
 function focusLifetimeYearsRounded(value: number) {
@@ -3319,7 +4274,6 @@ function isDefaultState(state: {
   columns: (typeof DEFAULT_STATE)['columns']
   displayMode: (typeof DEFAULT_STATE)['displayMode']
   significantDigits: number
-  autoHideKeyCommands: boolean
 }) {
   return (
     state.lifetimeYears === DEFAULT_STATE.lifetimeYears &&
@@ -3327,7 +4281,6 @@ function isDefaultState(state: {
     state.customDaysPerYear === DEFAULT_STATE.customDaysPerYear &&
     state.displayMode === DEFAULT_STATE.displayMode &&
     state.significantDigits === DEFAULT_STATE.significantDigits &&
-    state.autoHideKeyCommands === DEFAULT_STATE.autoHideKeyCommands &&
     sameRows(state.rows, DEFAULT_STATE.rows) &&
     sameColumns(state.columns, DEFAULT_STATE.columns)
   )

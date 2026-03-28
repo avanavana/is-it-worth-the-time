@@ -159,6 +159,87 @@ export function formatPreciseLongText(seconds: number): string {
   return `${trim(primaryValue)} ${longUnitLabel(selected.key, primaryValue)}, ${trim(secondaryValue)} ${longUnitLabel(secondary.key, secondaryValue)}`
 }
 
+export function formatNonApproximateCellTooltipText(
+  seconds: number,
+  compact: CompactCellDisplay,
+): string | null {
+  const normalizedUnit = compact.unit.toLowerCase()
+
+  if (normalizedUnit === 'sec') {
+    return null
+  }
+
+  if (normalizedUnit === 'yr' || normalizedUnit === 'yrs') {
+    const days = seconds / SECONDS_IN_DAY
+    return `${trim(days)} ${shortUnitLabel('d', days)}`
+  }
+
+  if (normalizedUnit === 'mo') {
+    const days = seconds / SECONDS_IN_DAY
+    return `${trim(days)} ${shortUnitLabel('d', days)}`
+  }
+
+  if (normalizedUnit === 'week' || normalizedUnit === 'weeks') {
+    const days = seconds / SECONDS_IN_DAY
+    return `${trim(days)} ${shortUnitLabel('d', days)}`
+  }
+
+  if (normalizedUnit === 'day' || normalizedUnit === 'days') {
+    const hours = seconds / SECONDS_IN_HOUR
+    return `${trim(hours)} ${shortUnitLabel('h', hours)}`
+  }
+
+  if (normalizedUnit === 'hr' || normalizedUnit === 'hrs') {
+    const totalHours = seconds / SECONDS_IN_HOUR
+    if (nearlyEqual(totalHours, Math.round(totalHours))) {
+      return null
+    }
+
+    let wholeHours = Math.floor(totalHours)
+    let minutes = Math.round((totalHours - wholeHours) * 60)
+    if (minutes === 60) {
+      wholeHours += 1
+      minutes = 0
+    }
+
+    if (wholeHours <= 0 && minutes > 0) {
+      return `${minutes} ${shortUnitLabel('m', minutes)}`
+    }
+
+    if (minutes <= 0) {
+      return `${wholeHours} ${shortUnitLabel('h', wholeHours)}`
+    }
+
+    return `${wholeHours} ${shortUnitLabel('h', wholeHours)}, ${minutes} ${shortUnitLabel('m', minutes)}`
+  }
+
+  if (normalizedUnit === 'min') {
+    const totalMinutes = seconds / SECONDS_IN_MINUTE
+    if (nearlyEqual(totalMinutes, Math.round(totalMinutes))) {
+      return null
+    }
+
+    let wholeMinutes = Math.floor(totalMinutes)
+    let remainingSeconds = Math.round((totalMinutes - wholeMinutes) * 60)
+    if (remainingSeconds === 60) {
+      wholeMinutes += 1
+      remainingSeconds = 0
+    }
+
+    if (wholeMinutes <= 0 && remainingSeconds > 0) {
+      return `${remainingSeconds} ${shortUnitLabel('s', remainingSeconds)}`
+    }
+
+    if (remainingSeconds <= 0) {
+      return `${wholeMinutes} ${shortUnitLabel('m', wholeMinutes)}`
+    }
+
+    return `${wholeMinutes} ${shortUnitLabel('m', wholeMinutes)}, ${remainingSeconds} ${shortUnitLabel('s', remainingSeconds)}`
+  }
+
+  return null
+}
+
 export function formatExactDaysTooltipText(seconds: number): string {
   const days = seconds / SECONDS_IN_DAY
   return `${trim(days)} ${Math.abs(days) === 1 ? 'day' : 'days'}`

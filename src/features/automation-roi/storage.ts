@@ -4,6 +4,8 @@ import { persistedStateSchema } from './validation'
 
 import type { PersistedAutomationROIState } from './types'
 
+const KEY_COMMANDS_VISIBILITY_MIGRATION_KEY = `${STORAGE_KEY}:key-commands-v2`
+
 export function loadPersistedState(): PersistedAutomationROIState {
   if (typeof window === 'undefined') {
     return copyDefaults()
@@ -34,7 +36,14 @@ export function savePersistedState(state: PersistedAutomationROIState) {
     return
   }
 
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  window.localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      ...state,
+      // KC visibility is intentionally session-only to preserve initial-load behavior.
+      autoHideKeyCommands: false,
+    }),
+  )
 }
 
 function normalizeState(state: PersistedAutomationROIState): PersistedAutomationROIState {
@@ -65,6 +74,8 @@ function normalizeState(state: PersistedAutomationROIState): PersistedAutomation
     ...state,
     rows,
     columns,
+    // KC visibility is intentionally session-only to preserve initial-load behavior.
+    autoHideKeyCommands: false,
   }
 }
 
@@ -80,6 +91,15 @@ function migratePersistedState(raw: unknown): unknown {
     typeof migrated.showKeyboardCommands === 'boolean'
   ) {
     migrated.autoHideKeyCommands = migrated.showKeyboardCommands
+  }
+
+  if (typeof window !== 'undefined') {
+    const hasMigratedKeyCommands =
+      window.localStorage.getItem(KEY_COMMANDS_VISIBILITY_MIGRATION_KEY) === '1'
+    if (!hasMigratedKeyCommands) {
+      migrated.autoHideKeyCommands = false
+      window.localStorage.setItem(KEY_COMMANDS_VISIBILITY_MIGRATION_KEY, '1')
+    }
   }
 
   return migrated

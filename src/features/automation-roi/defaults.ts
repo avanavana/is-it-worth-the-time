@@ -31,7 +31,7 @@ export const DEFAULT_STATE: PersistedAutomationROIState = {
   columns: DEFAULT_COLUMNS,
   displayMode: 'humanized',
   significantDigits: 4,
-  autoHideKeyCommands: true,
+  autoHideKeyCommands: false,
 }
 
 export function copyDefaults(): PersistedAutomationROIState {

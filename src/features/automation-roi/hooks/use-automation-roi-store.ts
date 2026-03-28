@@ -2,11 +2,10 @@ import { create } from 'zustand'
 
 import { getRunsPerYear } from '../calculations'
 import { MAX_COLUMNS, MIN_COLUMNS, MIN_ROWS } from '../constants'
-import { copyDefaults } from '../defaults'
+import { copyDefaults, DEFAULT_COLUMNS, DEFAULT_ROWS } from '../defaults'
 import { loadPersistedState } from '../storage'
 import type {
   CalendarBasis,
-  CellDetails,
   DisplayMode,
   FrequencyColumn,
   PersistedAutomationROIState,
@@ -14,46 +13,42 @@ import type {
 } from '../types'
 
 interface AutomationROIState extends PersistedAutomationROIState {
-  selectedCell: CellDetails | null
-  setSelectedCell: (details: CellDetails | null) => void
   setLifetimeYears: (value: number) => void
   setCalendarBasis: (value: CalendarBasis) => void
-  setCustomDaysPerYear: (value: number) => void
   setDisplayMode: (value: DisplayMode) => void
   setAutoHideKeyCommands: (value: boolean) => void
-  setSignificantDigits: (value: number) => void
   addCustomRow: (payload: Omit<SavingsRow, 'id' | 'isCustom'>) => void
-  updateCustomRow: (id: string, payload: Omit<SavingsRow, 'id' | 'isCustom'>) => void
   deleteCustomRow: (id: string) => void
+  toggleDefaultRow: (id: string) => void
   addCustomColumn: (payload: Omit<FrequencyColumn, 'id' | 'isCustom'>) => void
-  updateCustomColumn: (
-    id: string,
-    payload: Omit<FrequencyColumn, 'id' | 'isCustom'>,
-  ) => void
   deleteCustomColumn: (id: string) => void
+  toggleDefaultColumn: (id: string) => void
   resetDefaults: () => void
-  getPersistedState: () => PersistedAutomationROIState
 }
 
 const bootState = loadPersistedState()
 
-export const useAutomationROIStore = create<AutomationROIState>((set, get) => ({
+export const useAutomationROIStore = create<AutomationROIState>((set) => ({
   ...bootState,
-  selectedCell: null,
 
-  setSelectedCell: (details) => set({ selectedCell: details }),
+  setLifetimeYears: (value) =>
+    set((state) => {
+      const nextLifetimeYears = clamp(value, 0.1, 25)
+      return state.lifetimeYears === nextLifetimeYears
+        ? state
+        : { lifetimeYears: nextLifetimeYears }
+    }),
 
-  setLifetimeYears: (value) => set({ lifetimeYears: clamp(value, 0.1, 25) }),
+  setCalendarBasis: (value) =>
+    set((state) => (state.calendarBasis === value ? state : { calendarBasis: value })),
 
-  setCalendarBasis: (value) => set({ calendarBasis: value }),
+  setDisplayMode: (value) =>
+    set((state) => (state.displayMode === value ? state : { displayMode: value })),
 
-  setCustomDaysPerYear: (value) => set({ customDaysPerYear: clamp(value, 1, 366) }),
-
-  setDisplayMode: (value) => set({ displayMode: value }),
-
-  setAutoHideKeyCommands: (value) => set({ autoHideKeyCommands: value }),
-
-  setSignificantDigits: (value) => set({ significantDigits: clamp(value, 2, 8) }),
+  setAutoHideKeyCommands: (value) =>
+    set((state) =>
+      state.autoHideKeyCommands === value ? state : { autoHideKeyCommands: value },
+    ),
 
   addCustomRow: (payload) =>
     set((state) => {
@@ -70,21 +65,6 @@ export const useAutomationROIStore = create<AutomationROIState>((set, get) => ({
       return { rows: nextRows }
     }),
 
-  updateCustomRow: (id, payload) =>
-    set((state) => {
-      const updatedRows = state.rows.map((row) =>
-        row.id === id && row.isCustom
-          ? {
-              ...row,
-              label: payload.label,
-              seconds: payload.seconds,
-            }
-          : row,
-      )
-
-      return { rows: sortRows(updatedRows) }
-    }),
-
   deleteCustomRow: (id) =>
     set((state) => {
       if (state.rows.length <= MIN_ROWS) {
@@ -93,11 +73,27 @@ export const useAutomationROIStore = create<AutomationROIState>((set, get) => ({
 
       return {
         rows: state.rows.filter((row) => row.id !== id),
-        selectedCell:
-          state.selectedCell && state.selectedCell.rowId === id
-            ? null
-            : state.selectedCell,
       }
+    }),
+
+  toggleDefaultRow: (id) =>
+    set((state) => {
+      const preset = DEFAULT_ROWS.find((row) => row.id === id)
+      if (!preset) {
+        return state
+      }
+
+      const isEnabled = state.rows.some((row) => row.id === id && !row.isCustom)
+      if (isEnabled) {
+        const nextRows = state.rows.filter((row) => row.id !== id)
+        if (nextRows.length < MIN_ROWS) {
+          return state
+        }
+
+        return { rows: nextRows }
+      }
+
+      return { rows: sortRows([...state.rows, { ...preset }]) }
     }),
 
   addCustomColumn: (payload) =>
@@ -124,24 +120,6 @@ export const useAutomationROIStore = create<AutomationROIState>((set, get) => ({
       return { columns: nextColumns }
     }),
 
-  updateCustomColumn: (id, payload) =>
-    set((state) => {
-      const updatedColumns = state.columns.map((column) =>
-        column.id === id && column.isCustom
-          ? {
-              ...column,
-              label: payload.label,
-              amount: payload.amount,
-              unit: payload.unit,
-            }
-          : column,
-      )
-
-      return {
-        columns: sortColumns(updatedColumns, state.calendarBasis, state.customDaysPerYear),
-      }
-    }),
-
   deleteCustomColumn: (id) =>
     set((state) => {
       if (state.columns.length <= MIN_COLUMNS) {
@@ -150,31 +128,40 @@ export const useAutomationROIStore = create<AutomationROIState>((set, get) => ({
 
       return {
         columns: state.columns.filter((column) => column.id !== id),
-        selectedCell:
-          state.selectedCell && state.selectedCell.columnId === id
-            ? null
-            : state.selectedCell,
+      }
+    }),
+
+  toggleDefaultColumn: (id) =>
+    set((state) => {
+      const preset = DEFAULT_COLUMNS.find((column) => column.id === id)
+      if (!preset) {
+        return state
+      }
+
+      const isEnabled = state.columns.some(
+        (column) => column.id === id && !column.isCustom,
+      )
+      if (isEnabled) {
+        const nextColumns = state.columns.filter((column) => column.id !== id)
+        if (nextColumns.length < MIN_COLUMNS) {
+          return state
+        }
+
+        return { columns: nextColumns }
+      }
+
+      return {
+        columns: sortColumns(
+          [...state.columns, { ...preset }],
+          state.calendarBasis,
+          state.customDaysPerYear,
+        ),
       }
     }),
 
   resetDefaults: () => {
     const defaults = copyDefaults()
-    set({ ...defaults, selectedCell: null })
-  },
-
-  getPersistedState: () => {
-    const state = get()
-
-    return {
-      lifetimeYears: state.lifetimeYears,
-      calendarBasis: state.calendarBasis,
-      customDaysPerYear: state.customDaysPerYear,
-      rows: state.rows,
-      columns: state.columns,
-      displayMode: state.displayMode,
-      significantDigits: state.significantDigits,
-      autoHideKeyCommands: state.autoHideKeyCommands,
-    }
+    set({ ...defaults })
   },
 }))
 

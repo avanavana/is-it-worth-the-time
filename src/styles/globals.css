@@ -103,7 +103,11 @@ html,
 body,
 #root {
   height: 100%;
-  overflow: hidden;
+}
+
+body {
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 @keyframes terminal-blink {
