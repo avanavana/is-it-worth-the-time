@@ -21,6 +21,7 @@ interface PageFooterProps {
 
 interface FooterActionProps {
   label: ReactNode
+  ariaLabel?: string
   active?: boolean
   onClick: () => void
 }
@@ -83,10 +84,11 @@ function normalizeCommandKey(key: string) {
   return null
 }
 
-function FooterAction({ label, active = false, onClick }: FooterActionProps) {
+function FooterAction({ label, ariaLabel, active = false, onClick }: FooterActionProps) {
   return (
     <button
       type="button"
+      aria-label={ariaLabel}
       onClick={onClick}
       className={cn(
         footerInteractiveBaseClass,
@@ -137,10 +139,19 @@ export function PageFooter({
   const commandToggleArmedRef = useRef(false)
 
   const actions = [
-    'Created by Avana Vana 🡭',
-    'Inspired by xkcd 🡭',
-    'View on Github 🡭',
-    'Settings',
+    {
+      label: 'Created by Avana Vana 🡭',
+      ariaLabel: 'Created by Avana Vana (opens in a new tab)',
+    },
+    {
+      label: 'Inspired by xkcd 🡭',
+      ariaLabel: 'Inspired by xkcd (opens in a new tab)',
+    },
+    {
+      label: 'View on Github 🡭',
+      ariaLabel: 'View on GitHub (opens in a new tab)',
+    },
+    { label: 'Settings' },
   ]
 
   const visibleCount =
@@ -484,6 +495,7 @@ export function PageFooter({
             </span>
             <FooterAction
               label={commandRowVisible ? 'Hide key commands' : 'Show key commands'}
+              ariaLabel={`${commandRowVisible ? 'Hide' : 'Show'} key commands. Shortcut: Command plus K`}
               active={commandToggleActive}
               onClick={() => {
                 onToggleCommands?.(!commandRowVisible)
@@ -592,9 +604,10 @@ export function PageFooter({
       {revealCount === undefined ? (
         <div className={footerLinksLayoutClass}>
           {visibleActions.map((label, index) => (
-            <Fragment key={label}>
+            <Fragment key={label.label}>
               <FooterAction
-                label={label}
+                label={label.label}
+                ariaLabel={label.ariaLabel}
                 onClick={() => onAction(index)}
                 active={activeIndex === footerLinkStartIndex + index}
               />
@@ -620,9 +633,10 @@ export function PageFooter({
               className={footerLinksLayoutClass}
             >
               {visibleActions.map((label, index) => (
-                <Fragment key={label}>
+                <Fragment key={label.label}>
                   <FooterAction
-                    label={label}
+                    label={label.label}
+                    ariaLabel={label.ariaLabel}
                     onClick={() => onAction(index)}
                     active={activeIndex === footerLinkStartIndex + index}
                   />
@@ -635,9 +649,9 @@ export function PageFooter({
           ) : reserveIntroSpace ? (
             <div className={cn('pointer-events-none invisible', footerLinksLayoutClass)} aria-hidden="true">
               {actions.map((label, index) => (
-                <Fragment key={`placeholder-${label}`}>
-                  <span className="inline-flex items-center whitespace-nowrap pb-[1px] leading-4 font-medium">
-                    {label}
+                <Fragment key={`placeholder-${label.label}`}>
+                  <span className="inline-flex items-center whitespace-nowrap pb-px leading-4 font-medium">
+                    {label.label}
                   </span>
                   {index < actions.length - 1 ? (
                     <Separator aria-hidden className="hidden sm:mx-4 sm:block sm:shrink-0" />

@@ -2158,7 +2158,7 @@ export function AutomationROIPage() {
             tabIndex={0}
             data-screen-autofocus-view="home"
           >
-            <TerminalHeader title={homeTitle} typewriter />
+            <TerminalHeader title={homeTitle} typewriter spacingClassName="mb-12" />
 
             <div className="grow max-w-[500px]">
               <p className="m-0 text-[12px] font-medium leading-6 text-muted-foreground">
@@ -2221,6 +2221,11 @@ export function AutomationROIPage() {
                   <div className="flex items-center">
                     <button
                       type="button"
+                      aria-label={
+                        displayMode === 'exact'
+                          ? 'Result is showing exact value. Activate to show approximate value.'
+                          : 'Result is showing approximate value. Activate to show exact value.'
+                      }
                       className="relative inline-flex h-6 cursor-pointer items-center whitespace-nowrap pr-[12px] font-bold text-foreground focus-visible:outline-none"
                       onClick={() => handleHomeAction(HOME_CURSOR_RESULT_INDEX)}
                     >
@@ -2368,6 +2373,7 @@ export function AutomationROIPage() {
                 <div className="mb-1 flex items-center gap-3 text-[12px]">
                   <InlineAction
                     label="-"
+                    ariaLabel="Decrease calculation period"
                     onClick={() => handleTableAction(tableDecrementCursorIndex)}
                     active={activeTableCursorIndex === tableDecrementCursorIndex}
                     disabled={!tableCanDecrementLifetime}
@@ -2377,6 +2383,7 @@ export function AutomationROIPage() {
                   <div ref={tableSliderTrackRef} className="relative flex-1 pt-5">
                     <button
                       type="button"
+                      aria-label={`Current period: ${formatLifetimePeriod(lifetimeYears)}. Activate and use left or right arrow keys to adjust.`}
                       onClick={() => setTableCursorIndex(tableSliderIndicatorCursorIndex)}
                       onPointerDown={handleLifetimeIndicatorPointerDown}
                       className={cn(
@@ -2432,6 +2439,7 @@ export function AutomationROIPage() {
                       }}
                       className="py-2 **:data-[slot=slider-track]:h-px **:data-[slot=slider-track]:rounded-none **:data-[slot=slider-track]:bg-underline **:data-[slot=slider-range]:bg-foreground"
                       thumbProps={{
+                        'aria-label': 'Lifetime period slider',
                         className:
                           'size-[44px] rounded-none border-0 bg-transparent opacity-0 shadow-none hover:ring-0 active:ring-0 focus-visible:ring-0',
                       }}
@@ -2439,6 +2447,7 @@ export function AutomationROIPage() {
                   </div>
                   <InlineAction
                     label="+"
+                    ariaLabel="Increase calculation period"
                     onClick={() => handleTableAction(tableIncrementCursorIndex)}
                     active={activeTableCursorIndex === tableIncrementCursorIndex}
                     disabled={!tableCanIncrementLifetime}
@@ -2512,6 +2521,7 @@ export function AutomationROIPage() {
                     <div className="relative inline-flex items-center gap-1">
                       <button
                         type="button"
+                        aria-label="Scroll table left"
                         onClick={() => {
                           setTableCursorIndex(tableScrollCursorIndex)
                           scrollTableByStep(-1)
@@ -2542,6 +2552,7 @@ export function AutomationROIPage() {
                       </button>
                       <button
                         type="button"
+                        aria-label="Scroll table right"
                         onClick={() => {
                           setTableCursorIndex(tableScrollCursorIndex)
                           scrollTableByStep(1)
@@ -2712,6 +2723,11 @@ export function AutomationROIPage() {
                 {settingsOptions.map((option, index) => {
                   const optionIndex = settingsOptionStartIndex + index
                   const isResetOption = option.id === 'reset'
+                  const settingsOptionAriaLabel = isResetOption
+                    ? option.label
+                    : option.id === 'theme'
+                      ? `${option.label} ${option.value}. Activate to cycle theme.`
+                      : `${option.label} ${option.value}. Activate to toggle.`
 
                   return (
                     <div
@@ -2726,6 +2742,7 @@ export function AutomationROIPage() {
                       </div>
                       <button
                         type="button"
+                        aria-label={settingsOptionAriaLabel}
                         className={cn(
                           isResetOption
                             ? cn(
@@ -2771,14 +2788,14 @@ export function AutomationROIPage() {
                             </span>
                             {option.value ? (
                               <span style={{ lineHeight: 'normal' }}>
-                              <MenuOptionTypewriter
-                                text={option.value}
-                                startDelayMs={optionIndex * MENU_OPTION_STAGGER_MS}
-                                animateOnlyOnMount
-                                reserveLayout
-                              />
-                            </span>
-                          ) : null}
+                                <MenuOptionTypewriter
+                                  text={option.value}
+                                  startDelayMs={optionIndex * MENU_OPTION_STAGGER_MS}
+                                  animateOnlyOnMount
+                                  reserveLayout
+                                />
+                              </span>
+                            ) : null}
                           </span>
                         )}
                       </button>
@@ -3767,6 +3784,7 @@ function InlineAction({
   buttonRef,
   onMouseEnter,
   onFocus,
+  ariaLabel,
 }: {
   label: ReactNode
   onClick: () => void
@@ -3780,11 +3798,13 @@ function InlineAction({
   buttonRef?: Ref<HTMLButtonElement>
   onMouseEnter?: () => void
   onFocus?: () => void
+  ariaLabel?: string
 }) {
   return (
     <button
       ref={buttonRef}
       type="button"
+      aria-label={ariaLabel}
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       onFocus={onFocus}
@@ -3853,12 +3873,14 @@ function TerminalCursor({
 function TerminalHeader({
   title,
   typewriter = false,
+  spacingClassName = 'mb-6',
 }: {
   title: string
   typewriter?: boolean
+  spacingClassName?: string
 }) {
   return (
-    <header className="mb-12 w-full max-w-[640px]">
+    <header className={cn('w-full max-w-[640px]', spacingClassName)}>
       <h1 className="m-0 text-[12px] font-bold leading-none text-foreground">
         {typewriter ? <TypedWords text={title} /> : title}
       </h1>
