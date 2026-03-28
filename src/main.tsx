@@ -1,14 +1,20 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import App from '@/app/App'
-import { Providers } from '@/app/providers'
+import App from '@/App'
+import { ToastProvider } from '@/lib/context/toast-context'
+import { AppThemeProvider } from '@/lib/context/theme-context'
+import { TooltipProvider } from '@/lib/context/tooltip-context'
 import '@/styles/globals.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Providers>
-      <App />
-    </Providers>
+    <AppThemeProvider>
+      <TooltipProvider>
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </TooltipProvider>
+    </AppThemeProvider>
   </StrictMode>,
 )

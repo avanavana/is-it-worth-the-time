@@ -42,6 +42,9 @@
 }
 
 @theme {
+  --breakpoint-content: 40rem;
+  --breakpoint-table: 46rem;
+
   --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
 
@@ -65,6 +68,14 @@
     var(--color-background) 1px,
     var(--color-background) 2px
   );
+}
+
+@utility max-w-shell {
+  max-width: 75rem;
+}
+
+@utility max-w-content {
+  max-width: 40rem;
 }
 
 :root {

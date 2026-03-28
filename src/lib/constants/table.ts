@@ -1,0 +1,7 @@
+export const TABLE_CURSOR_BACK_INDEX = 0
+export const TABLE_LAYOUT_BREAKPOINT_PX = 736
+export const TABLE_SCROLL_STEP_PX = 99
+export const TABLE_SCROLL_EPSILON_PX = 0.25
+export const TABLE_TOOLTIP_SHOW_DELAY_MS = 500
+export const TABLE_TOOLTIP_OFFSET_X = 8
+export const TABLE_TOOLTIP_OFFSET_Y = 8

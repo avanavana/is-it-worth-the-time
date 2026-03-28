@@ -1,0 +1,5 @@
+export const WORD_REVEAL_STEP_SECONDS = 0.01
+export const WORD_REVEAL_DURATION_SECONDS = 0.18
+export const MENU_OPTION_STAGGER_MS = 85
+export const MENU_OPTION_CHAR_MS = 14
+export const MENU_CURSOR_REVEAL_DELAY_MS = 90
