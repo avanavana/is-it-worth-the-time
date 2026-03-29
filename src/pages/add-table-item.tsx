@@ -3,6 +3,7 @@ import { motion, type Variants } from 'motion/react'
 
 import { Action } from '@/components/action'
 import { Cursor } from '@/components/cursor'
+import { ErrorLog, type TerminalErrorEntry } from '@/components/error-log'
 import { Header } from '@/components/header'
 import { MenuOption } from '@/components/menu-option'
 
@@ -16,6 +17,7 @@ export function AddTableItemScreen({
   inputRef,
   cursorIndex,
   cancelRef,
+  errors,
   examples,
   menuOptionStaggerMs,
   autofocusView,
@@ -34,6 +36,7 @@ export function AddTableItemScreen({
   inputRef: RefObject<HTMLInputElement | null>
   cursorIndex: number
   cancelRef: RefObject<HTMLButtonElement | null>
+  errors: TerminalErrorEntry[]
   examples: string[]
   menuOptionStaggerMs: number
   autofocusView: 'add-column' | 'add-row'
@@ -63,34 +66,38 @@ export function AddTableItemScreen({
             onSubmit()
           }}
         >
-          <label
-            className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground"
-            htmlFor={inputId}
-          >
-            <MenuOption text={fieldLabel} startDelayMs={0} />
-            <span
-              className="inline-flex items-center"
-              onMouseDown={(event) => {
-                event.preventDefault()
-                onSetCursorIndex(0)
-                inputRef.current?.focus()
-              }}
+          <div className="space-y-6">
+            <label
+              className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground"
+              htmlFor={inputId}
             >
-              <input
-                id={inputId}
-                ref={inputRef}
-                data-screen-autofocus-view={autofocusView}
-                value={draft}
-                onChange={(event) => onDraftChange(event.target.value)}
-                className="w-0 border-0 bg-transparent p-0 text-[12px] font-bold text-foreground caret-transparent outline-none"
-                style={{ width: `${Math.max(1, draft.length)}ch` }}
-                autoComplete="off"
-                spellCheck={false}
-                onFocus={() => onSetCursorIndex(0)}
-              />
-              <Cursor active={cursorIndex === 0} />
-            </span>
-          </label>
+              <MenuOption text={fieldLabel} startDelayMs={0} />
+              <span
+                className="inline-flex items-center"
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  onSetCursorIndex(0)
+                  inputRef.current?.focus()
+                }}
+              >
+                <input
+                  id={inputId}
+                  ref={inputRef}
+                  data-screen-autofocus-view={autofocusView}
+                  value={draft}
+                  onChange={(event) => onDraftChange(event.target.value)}
+                  className="w-0 border-0 bg-transparent p-0 text-[12px] font-bold text-foreground caret-transparent outline-none"
+                  style={{ width: `${Math.max(1, draft.length)}ch` }}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onFocus={() => onSetCursorIndex(0)}
+                />
+                <Cursor active={cursorIndex === 0} />
+              </span>
+            </label>
+
+            <ErrorLog errors={errors} />
+          </div>
 
           <div className="space-y-3">
             <Action

@@ -38,56 +38,25 @@ Canonical routes used by the app:
 Notes:
 
 - `:menuId` is one of `frequency`, `savings`, `period`.
-- Browser back/forward is the primary return path between screens.
+- Built-in back/cancel controls and keyboard shortcuts are first-class navigation paths; browser back/forward is also supported via URL state.
 
-## Screen Behavior
+## Features
 
-### Home
-
-- Sentence-style inline selectors for task frequency, time saved each time, and evaluation period.
-- Result can be toggled (click/enter/space) between approximate and exact display.
-- `Show full table` opens the table view.
-- `Reset to defaults` appears whenever current state differs from defaults.
-
-### Table
-
-- Back action to return home.
-- Inline period selector in the sentence above the table.
-- Discrete lifetime slider (mouse + keyboard).
-- Table can horizontally scroll on narrower screens.
-- Cell tooltips show exact values for approximate cells.
-- Cell tooltips show equivalent conversions for non-approximate cells.
-- Legend contains row/column edit actions and impossible-cell hatch key.
-
-### Select Menus
-
-- Used by inline selectors on Home/Table.
-- Show enabled default items plus any custom items.
-- Current selected value is marked with `(current)`.
-- `New option…` opens an add-option screen.
-- Custom frequency/time items can be removed directly from these menus.
-
-### Add Option
-
-- Opened from `New option…`.
-- Inline terminal-style input with parser examples.
-- `Enter` submits.
-- `Cancel` returns without changes.
-
-### Edit Table Rows / Columns
-
-- Toggle built-in rows/columns on or off.
-- Add custom rows/columns.
-- Remove custom rows/columns.
-- Bottom action label switches from `Cancel` to `Back` after interaction.
-
-### Settings
-
-- Show exact values toggle.
-- Calendar basis toggle (`24-hour day / 7-day week / 365-day year` vs `8-hour workday / 5-day workweek / 260-day work year`).
-- Theme cycle (`System` / `Light` / `Dark`).
-- Show key commands toggle.
-- Reset to defaults action (shown only when applicable).
+- Update calculation parameters from inline sentence controls (frequency, time saved, and period).
+- Toggle the home result between approximate and exact display.
+- Open a live table view that recomputes immediately as inputs change.
+- Adjust period from the table sentence, slider, decrement/increment actions, or keyboard controls.
+- Scroll the table on narrow layouts with both mouse and keyboard.
+- Edit table rows/columns by toggling default entries on/off.
+- Add custom rows/columns for time saved and task frequency.
+- Remove custom rows/columns from either edit screens or select menus.
+- Add custom options directly from select menus with plain-language input parsing.
+- View tooltip details for both approximate and non-approximate table cells.
+- Configure exact vs approximate display in Settings.
+- Configure calendar basis mode in Settings.
+- Configure theme (`System`, `Light`, `Dark`) in Settings.
+- Configure key-command palette visibility in Settings.
+- Reset to defaults when state differs from defaults.
 
 ## Keyboard Contract
 
@@ -103,12 +72,13 @@ Context-specific controls:
 - `Cmd+K` (or `Ctrl+K`) toggles the key-commands palette when available.
 - On initial load, the key-commands palette is shown briefly, then collapses to a `Show key commands` action.
 
-## Custom Option Model
+## Accessibility
 
-- Custom frequency and time-saved options become real table columns/rows.
-- Because they are part of table state, they are visible across Home/Table/select/edit screens.
-- Custom items are removable from both select menus and edit menus.
-- If the currently selected custom option is removed, selection falls back to app defaults (`5 times a day` for frequency, `1 minute` for time saved).
+- Keyboard-first interaction is supported across all primary screens and controls.
+- Interactive controls use semantic elements (`button`, `input`, labels) and explicit `aria-label` text where needed.
+- Tooltip content is visual-only and non-blocking (`aria-hidden` for custom pointer-follow tooltip rendering).
+- Motion respects reduced-motion preferences via motion-safe/reduced-motion paths.
+- Cursor-driven interactions are designed to minimize layout shift and preserve focusability.
 
 ## Persistence
 
@@ -133,7 +103,6 @@ Session-only behavior:
 - Motion (`motion/react`)
 - NumberFlow
 - Zod
-- Sonner
 
 ## Development
 

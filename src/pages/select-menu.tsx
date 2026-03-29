@@ -21,6 +21,7 @@ export function SelectMenuScreen({
   menuSelectedIndex,
   menuNewOptionIndex,
   menuCancelIndex,
+  cancelLabel,
   menuOptionStaggerMs,
   onKeyDown,
   onSetMenuIndex,
@@ -39,6 +40,7 @@ export function SelectMenuScreen({
   menuSelectedIndex: number
   menuNewOptionIndex: number
   menuCancelIndex: number
+  cancelLabel: string
   menuOptionStaggerMs: number
   onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void
   onSetMenuIndex: (index: number) => void
@@ -150,7 +152,7 @@ export function SelectMenuScreen({
             <Action
               label={
                 <MenuOption
-                  text="Cancel"
+                  text={cancelLabel}
                   startDelayMs={menuCancelIndex * menuOptionStaggerMs}
                 />
               }

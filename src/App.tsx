@@ -7,7 +7,6 @@ import {
 } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTheme } from 'next-themes'
-import { toast } from 'sonner'
 
 import { HomeScreen } from '@/pages/home'
 import { AddMenuOptionScreen } from '@/pages/add-menu-option'
@@ -84,6 +83,7 @@ import {
   TABLE_SCROLL_STEP_PX,
   TABLE_TOOLTIP_SHOW_DELAY_MS,
 } from '@/lib/constants/table'
+import { MAX_COLUMNS } from '@/lib/constants/limits'
 
 import type {
   KeyboardEvent,
@@ -102,6 +102,7 @@ import type {
   TableEditMenuKind,
   View,
 } from '@/types'
+import type { TerminalErrorEntry } from '@/components/error-log'
 
 type ActiveMenuOption =
   | { id: string; label: string; isCustom: boolean; kind: 'frequency'; column: FrequencyColumn }
@@ -159,6 +160,7 @@ export default function App() {
   )
   const [menuIndex, setMenuIndex] = useState(0)
   const [menuCursorVisible, setMenuCursorVisible] = useState(false)
+  const [menuHasInteracted, setMenuHasInteracted] = useState(false)
   const [menuCustomKind, setMenuCustomKind] = useState<MenuCustomKind>(
     initialNavigationState.menuCustomKind,
   )
@@ -201,6 +203,10 @@ export default function App() {
   })
   const [columnDraft, setColumnDraft] = useState('')
   const [rowDraft, setRowDraft] = useState('')
+  const [menuCustomErrors, setMenuCustomErrors] = useState<TerminalErrorEntry[]>([])
+  const [addColumnErrors, setAddColumnErrors] = useState<TerminalErrorEntry[]>([])
+  const [addRowErrors, setAddRowErrors] = useState<TerminalErrorEntry[]>([])
+  const errorIdRef = useRef(0)
   const menuOptionInputRef = useRef<HTMLInputElement | null>(null)
   const addMenuOptionCancelRef = useRef<HTMLButtonElement | null>(null)
   const columnInputRef = useRef<HTMLInputElement | null>(null)
@@ -248,6 +254,39 @@ export default function App() {
   const handleResultTypewriterComplete = useCallback(() => {
     setResultTypewriterDone(true)
   }, [])
+
+  useEffect(() => {
+    if (view !== 'add-menu-option' && menuCustomErrors.length > 0) {
+      const clearTimeoutId = window.setTimeout(() => {
+        setMenuCustomErrors([])
+      }, 0)
+      return () => {
+        window.clearTimeout(clearTimeoutId)
+      }
+    }
+  }, [menuCustomErrors.length, view])
+
+  useEffect(() => {
+    if (view !== 'add-column' && addColumnErrors.length > 0) {
+      const clearTimeoutId = window.setTimeout(() => {
+        setAddColumnErrors([])
+      }, 0)
+      return () => {
+        window.clearTimeout(clearTimeoutId)
+      }
+    }
+  }, [addColumnErrors.length, view])
+
+  useEffect(() => {
+    if (view !== 'add-row' && addRowErrors.length > 0) {
+      const clearTimeoutId = window.setTimeout(() => {
+        setAddRowErrors([])
+      }, 0)
+      return () => {
+        window.clearTimeout(clearTimeoutId)
+      }
+    }
+  }, [addRowErrors.length, view])
 
   const hasResettableStoreChanges = useMemo(
     () =>
@@ -471,6 +510,8 @@ export default function App() {
         ? timeMenuRows.filter((row) => !row.isCustom).length
         : LIFETIME_PRESETS_YEARS.length
   const menuSupportsCustomRemove = view === 'menu-frequency' || view === 'menu-time'
+  const menuHasCustomOptions = menuOptions.some((option) => option.isCustom)
+  const menuExitLabel = menuHasInteracted || menuHasCustomOptions ? 'Back' : 'Cancel'
   const menuOptionsCount = menuOptions.length
   const menuNewOptionIndex = menuOptionsCount
   const menuCancelIndex = menuOptionsCount + 1
@@ -1072,10 +1113,50 @@ export default function App() {
     )
   }, [menuCustomKind, menuReturnView, settingsReturnView, tableEditMenuKind, view])
 
+  const toTerminalErrorMessage = useCallback((message: string) => {
+    const trimmed = message.trim()
+    const normalized = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
+    return `${normalized} Command exited with status 2.`
+  }, [])
+
+  const pushMenuCustomError = useCallback(
+    (message: string) => {
+      errorIdRef.current += 1
+      setMenuCustomErrors((current) => [
+        ...current,
+        { id: errorIdRef.current, message: toTerminalErrorMessage(message) },
+      ])
+    },
+    [toTerminalErrorMessage],
+  )
+
+  const pushAddColumnError = useCallback(
+    (message: string) => {
+      errorIdRef.current += 1
+      setAddColumnErrors((current) => [
+        ...current,
+        { id: errorIdRef.current, message: toTerminalErrorMessage(message) },
+      ])
+    },
+    [toTerminalErrorMessage],
+  )
+
+  const pushAddRowError = useCallback(
+    (message: string) => {
+      errorIdRef.current += 1
+      setAddRowErrors((current) => [
+        ...current,
+        { id: errorIdRef.current, message: toTerminalErrorMessage(message) },
+      ])
+    },
+    [toTerminalErrorMessage],
+  )
+
   function openFrequencyMenu(returnView: BaseView) {
     setMenuReturnView(returnView)
     setMenuIndex(0)
     setMenuCursorVisible(false)
+    setMenuHasInteracted(false)
     setView('menu-frequency')
   }
 
@@ -1083,6 +1164,7 @@ export default function App() {
     setMenuReturnView(returnView)
     setMenuIndex(0)
     setMenuCursorVisible(false)
+    setMenuHasInteracted(false)
     setView('menu-time')
   }
 
@@ -1090,6 +1172,7 @@ export default function App() {
     setMenuReturnView(returnView)
     setMenuIndex(0)
     setMenuCursorVisible(false)
+    setMenuHasInteracted(false)
     setView('menu-lifetime')
   }
 
@@ -1210,6 +1293,7 @@ export default function App() {
       } else {
         setMenuIndex(Math.max(0, Math.min(index, nextFrequencyOptions.length - 1)))
       }
+      setMenuHasInteracted(true)
       return
     }
 
@@ -1247,6 +1331,7 @@ export default function App() {
       } else {
         setMenuIndex(Math.max(0, Math.min(index, nextTimeOptions.length - 1)))
       }
+      setMenuHasInteracted(true)
     }
   }
 
@@ -1254,6 +1339,7 @@ export default function App() {
     if (view === 'menu-frequency') {
       setMenuCustomKind('frequency')
       setMenuCustomDraft('')
+      setMenuCustomErrors([])
       setAddMenuOptionCursorIndex(0)
       setView('add-menu-option')
       return
@@ -1262,6 +1348,7 @@ export default function App() {
     if (view === 'menu-time') {
       setMenuCustomKind('time')
       setMenuCustomDraft('')
+      setMenuCustomErrors([])
       setAddMenuOptionCursorIndex(0)
       setView('add-menu-option')
       return
@@ -1270,6 +1357,7 @@ export default function App() {
     if (view === 'menu-lifetime') {
       setMenuCustomKind('lifetime')
       setMenuCustomDraft('')
+      setMenuCustomErrors([])
       setAddMenuOptionCursorIndex(0)
       setView('add-menu-option')
     }
@@ -1277,6 +1365,7 @@ export default function App() {
 
   function closeAddMenuOption() {
     setMenuCustomDraft('')
+    setMenuCustomErrors([])
     setMenuIndex(0)
     setMenuCursorVisible(false)
     setView(getMenuViewForKind(menuCustomKind))
@@ -1303,6 +1392,7 @@ export default function App() {
       if (activeTableEditMenuKind === 'rows') {
         setTableEditMenuKind('rows')
         setRowDraft('')
+        setAddRowErrors([])
         setAddRowCursorIndex(0)
         setView('add-row')
         return
@@ -1310,6 +1400,7 @@ export default function App() {
 
       setTableEditMenuKind('columns')
       setColumnDraft('')
+      setAddColumnErrors([])
       setAddColumnCursorIndex(0)
       setView('add-column')
       return
@@ -1399,7 +1490,10 @@ export default function App() {
     if (menuCustomKind === 'frequency') {
       const parsed = parseFrequencyInput(menuCustomDraft)
       if (!parsed.ok) {
-        toast.error(parsed.error)
+        pushMenuCustomError('Invalid input format')
+        setMenuCustomDraft('')
+        setAddMenuOptionCursorIndex(0)
+        menuOptionInputRef.current?.focus({ preventScroll: true })
         return
       }
 
@@ -1448,8 +1542,10 @@ export default function App() {
       )
 
       setMenuCustomDraft('')
+      setMenuCustomErrors([])
       setMenuIndex(nextMenuIndex)
       setMenuCursorVisible(false)
+      setMenuHasInteracted(true)
       setView('menu-frequency')
       return
     }
@@ -1457,7 +1553,10 @@ export default function App() {
     if (menuCustomKind === 'time') {
       const parsed = parseTimeSavedInput(menuCustomDraft)
       if (!parsed.ok) {
-        toast.error(parsed.error)
+        pushMenuCustomError('Invalid input format')
+        setMenuCustomDraft('')
+        setAddMenuOptionCursorIndex(0)
+        menuOptionInputRef.current?.focus({ preventScroll: true })
         return
       }
 
@@ -1486,15 +1585,20 @@ export default function App() {
       )
 
       setMenuCustomDraft('')
+      setMenuCustomErrors([])
       setMenuIndex(nextMenuIndex)
       setMenuCursorVisible(false)
+      setMenuHasInteracted(true)
       setView('menu-time')
       return
     }
 
     const parsed = parseDurationInput(menuCustomDraft, 'year')
     if (!parsed.ok) {
-      toast.error(parsed.error)
+      pushMenuCustomError('Invalid input format')
+      setMenuCustomDraft('')
+      setAddMenuOptionCursorIndex(0)
+      menuOptionInputRef.current?.focus({ preventScroll: true })
       return
     }
 
@@ -1504,8 +1608,10 @@ export default function App() {
       valuesNearlyEqual(years, nextLifetimeYears),
     )
     setMenuCustomDraft('')
+    setMenuCustomErrors([])
     setMenuIndex(presetIndex >= 0 ? presetIndex : LIFETIME_PRESETS_YEARS.length)
     setMenuCursorVisible(false)
+    setMenuHasInteracted(true)
     setView('menu-lifetime')
   }
 
@@ -1898,12 +2004,14 @@ export default function App() {
 
   function closeAddColumn() {
     setColumnDraft('')
+    setAddColumnErrors([])
     setAddColumnCursorIndex(0)
     returnToTableEditMenu()
   }
 
   function closeAddRow() {
     setRowDraft('')
+    setAddRowErrors([])
     setAddRowCursorIndex(0)
     returnToTableEditMenu()
   }
@@ -2023,7 +2131,30 @@ export default function App() {
   function submitColumn() {
     const parsed = parseFrequencyInput(columnDraft)
     if (!parsed.ok) {
-      toast.error(parsed.error)
+      pushAddColumnError('Invalid input format')
+      setColumnDraft('')
+      setAddColumnCursorIndex(0)
+      columnInputRef.current?.focus({ preventScroll: true })
+      return
+    }
+
+    const duplicateExists = columns.some(
+      (column) =>
+        valuesNearlyEqual(column.amount, parsed.amount) && column.unit === parsed.unit,
+    )
+    if (duplicateExists) {
+      pushAddColumnError('That column already exists')
+      setColumnDraft('')
+      setAddColumnCursorIndex(0)
+      columnInputRef.current?.focus({ preventScroll: true })
+      return
+    }
+
+    if (columns.length >= MAX_COLUMNS) {
+      pushAddColumnError(`Maximum of ${MAX_COLUMNS} columns reached`)
+      setColumnDraft('')
+      setAddColumnCursorIndex(0)
+      columnInputRef.current?.focus({ preventScroll: true })
       return
     }
 
@@ -2047,6 +2178,7 @@ export default function App() {
         : 0
 
     setColumnDraft('')
+    setAddColumnErrors([])
     setTableEditMenuHasInteracted((current) => ({ ...current, columns: true }))
     returnToTableEditMenu(nextMenuIndex)
   }
@@ -2054,7 +2186,19 @@ export default function App() {
   function submitRow() {
     const parsed = parseTimeSavedInput(rowDraft)
     if (!parsed.ok) {
-      toast.error(parsed.error)
+      pushAddRowError('Invalid input format')
+      setRowDraft('')
+      setAddRowCursorIndex(0)
+      rowInputRef.current?.focus({ preventScroll: true })
+      return
+    }
+
+    const duplicateExists = rows.some((row) => row.seconds === parsed.seconds)
+    if (duplicateExists) {
+      pushAddRowError('That row already exists')
+      setRowDraft('')
+      setAddRowCursorIndex(0)
+      rowInputRef.current?.focus({ preventScroll: true })
       return
     }
 
@@ -2074,6 +2218,7 @@ export default function App() {
         : 0
 
     setRowDraft('')
+    setAddRowErrors([])
     setTableEditMenuHasInteracted((current) => ({ ...current, rows: true }))
     returnToTableEditMenu(nextMenuIndex)
   }
@@ -2488,6 +2633,7 @@ export default function App() {
             menuSelectedIndex={menuSelectedIndex}
             menuNewOptionIndex={menuNewOptionIndex}
             menuCancelIndex={menuCancelIndex}
+            cancelLabel={menuExitLabel}
             menuOptionStaggerMs={MENU_OPTION_STAGGER_MS}
             onKeyDown={handleMenuKeyDown}
             onSetMenuIndex={setMenuIndex}
@@ -2661,6 +2807,7 @@ export default function App() {
             inputRef={menuOptionInputRef}
             cursorIndex={addMenuOptionCursorIndex}
             cancelRef={addMenuOptionCancelRef}
+            errors={menuCustomErrors}
             menuOptionStaggerMs={MENU_OPTION_STAGGER_MS}
             onKeyDown={handleAddMenuOptionKeyDown}
             onDraftChange={setMenuCustomDraft}
@@ -2681,6 +2828,7 @@ export default function App() {
             inputRef={columnInputRef}
             cursorIndex={addColumnCursorIndex}
             cancelRef={addColumnCancelRef}
+            errors={addColumnErrors}
             examples={['50/day', '10 tasks per day', 'Daily', 'Biweekly', '2/y', '...', 'etc']}
             menuOptionStaggerMs={MENU_OPTION_STAGGER_MS}
             autofocusView="add-column"
@@ -2703,6 +2851,7 @@ export default function App() {
             inputRef={rowInputRef}
             cursorIndex={addRowCursorIndex}
             cancelRef={addRowCancelRef}
+            errors={addRowErrors}
             examples={['10s', 'one minute', '5 min', '2h', 'five m', '...', 'etc']}
             menuOptionStaggerMs={MENU_OPTION_STAGGER_MS}
             autofocusView="add-row"

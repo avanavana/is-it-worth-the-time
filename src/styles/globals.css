@@ -58,6 +58,8 @@
   --color-muted-foreground: #7c7c7f;
   --color-primary: #0f1115;
   --color-ring: #a1a1aa;
+  --color-error: #e2274c;
+  --color-error-foreground: #ffffff;
 
   --text-2xs: 0.625rem;
 
@@ -98,6 +100,8 @@
   --color-muted-foreground: #a1a1aa;
   --color-primary: #ffffff;
   --color-ring: #71717a;
+  --color-error: #fc2d56;
+  --color-error-foreground: #0b0b0e;
 }
 
 * {
