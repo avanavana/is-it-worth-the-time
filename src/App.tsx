@@ -14,6 +14,7 @@ import { AddTableItemScreen } from '@/pages/add-table-item'
 import { SelectMenuScreen } from '@/pages/select-menu'
 import { SettingsScreen } from '@/pages/settings'
 import { TableScreen } from '@/pages/table'
+import { ErrorScreen } from '@/pages/error'
 import { MenuOption } from '@/components/menu-option'
 import { Header } from '@/components/header'
 
@@ -175,6 +176,7 @@ export default function App() {
   const [resultTypewriterDone, setResultTypewriterDone] = useState(false)
   const [homeRevealStage, setHomeRevealStage] = useState(0)
   const [tableCursorIndex, setTableCursorIndex] = useState(1)
+  const [errorCursorIndex, setErrorCursorIndex] = useState(0)
   const [homeFooterCommandToggleAvailable, setHomeFooterCommandToggleAvailable] = useState(false)
   const [tableFooterCommandToggleAvailable, setTableFooterCommandToggleAvailable] = useState(false)
   const autoHideKeyCommandsRef = useRef(autoHideKeyCommands)
@@ -446,6 +448,7 @@ export default function App() {
     view === 'menu-frequency' || view === 'menu-time' || view === 'menu-lifetime'
   const isTableEditMenuView = view === 'menu-edit-columns' || view === 'menu-edit-rows'
   const isSettingsView = view === 'settings'
+  const isErrorView = view === 'error-404' || view === 'error-403'
 
   const menuTitle =
     view === 'menu-frequency'
@@ -606,6 +609,20 @@ export default function App() {
       window.clearTimeout(revealMenuCursorTimeout)
     }
   }, [isMenuView, prefersReducedMotion, view])
+
+  useEffect(() => {
+    if (!isErrorView) {
+      return
+    }
+
+    const resetErrorCursorTimeout = window.setTimeout(() => {
+      setErrorCursorIndex(0)
+    }, 0)
+
+    return () => {
+      window.clearTimeout(resetErrorCursorTimeout)
+    }
+  }, [isErrorView, view])
 
   useEffect(() => {
     if (!isMenuView) {
@@ -1116,7 +1133,7 @@ export default function App() {
   const toTerminalErrorMessage = useCallback((message: string) => {
     const trimmed = message.trim()
     const normalized = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
-    return `${normalized} Command exited with status 2.`
+    return `${normalized} Process exited with status 2.`
   }, [])
 
   const pushMenuCustomError = useCallback(
@@ -1994,6 +2011,54 @@ export default function App() {
     }
   }
 
+  function handleErrorKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (!isErrorView) {
+      return
+    }
+
+    const moveBackward =
+      event.key === 'ArrowUp' ||
+      event.key === 'ArrowLeft' ||
+      (event.key === 'Tab' && event.shiftKey)
+    const moveForward =
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowRight' ||
+      (event.key === 'Tab' && !event.shiftKey)
+    const errorCursorMaxIndex = 3
+
+    if (moveBackward || moveForward) {
+      event.preventDefault()
+      setErrorCursorIndex((current) => {
+        if (moveBackward) {
+          return current === 0 ? errorCursorMaxIndex : current - 1
+        }
+
+        return current === errorCursorMaxIndex ? 0 : current + 1
+      })
+      return
+    }
+
+    if (isActivationKey(event.key)) {
+      event.preventDefault()
+      handleErrorAction(errorCursorIndex)
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setView('home')
+    }
+  }
+
+  function handleErrorAction(index: number) {
+    if (index === 0) {
+      setView('home')
+      return
+    }
+
+    handleFooterAction(index - 1)
+  }
+
   function resetAllDefaults() {
     resetDefaults()
     setFocusFrequency({ ...DEFAULT_FOCUS_FREQUENCY })
@@ -2617,6 +2682,23 @@ export default function App() {
             onSetSettingsIndex={setSettingsIndex}
             menuOptionStaggerMs={MENU_OPTION_STAGGER_MS}
             interactiveBaseClass={interactiveBaseClass}
+          />
+        ) : null}
+
+        {isErrorView ? (
+          <ErrorScreen
+            view={view}
+            screenVariants={activeScreenVariants}
+            message={
+              view === 'error-403'
+                ? 'Permission denied. Process exited with status 126.'
+                : 'Command not found. Process exited with status 127.'
+            }
+            onKeyDown={handleErrorKeyDown}
+            onBackHome={() => handleErrorAction(0)}
+            errorCursorIndex={errorCursorIndex}
+            onSetErrorCursorIndex={setErrorCursorIndex}
+            onErrorAction={handleErrorAction}
           />
         ) : null}
 

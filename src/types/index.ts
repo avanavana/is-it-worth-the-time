@@ -45,6 +45,8 @@ export interface CellDetails {
 export type View =
   | 'home'
   | 'table'
+  | 'error-404'
+  | 'error-403'
   | 'settings'
   | 'menu-frequency'
   | 'menu-time'

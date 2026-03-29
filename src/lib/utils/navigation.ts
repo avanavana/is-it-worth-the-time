@@ -24,18 +24,29 @@ export function parseNavigationStateFromPath(pathname: string): NavigationUrlSta
   const first = segments[0]
   const second = segments[1]
   const third = segments[2]
+  const fourth = segments[3]
 
   if (!first) {
     return state
   }
 
-  if (first === 'settings') {
-    state.view = 'settings'
+  if (first === '403') {
+    state.view = 'error-403'
     return state
   }
 
-  if (first === 'home' || first === 'table') {
-    const baseView: BaseView = first
+  if (first === '404') {
+    state.view = 'error-404'
+    return state
+  }
+
+  if (first === 'settings') {
+    state.view = segments.length === 1 ? 'settings' : 'error-404'
+    return state
+  }
+
+  if (first === 'table') {
+    const baseView: BaseView = 'table'
     state.menuReturnView = baseView
     state.settingsReturnView = baseView
 
@@ -45,39 +56,64 @@ export function parseNavigationStateFromPath(pathname: string): NavigationUrlSta
     }
 
     if (second === 'settings') {
-      state.view = 'settings'
+      state.view = !third ? 'settings' : 'error-404'
       return state
     }
 
     if (baseView === 'table' && second === 'rows') {
       state.tableEditMenuKind = 'rows'
-      state.view = third === 'add' ? 'add-row' : 'menu-edit-rows'
+      if (!third) {
+        state.view = 'menu-edit-rows'
+      } else if (third === 'add' && !fourth) {
+        state.view = 'add-row'
+      } else {
+        state.view = 'error-404'
+      }
       return state
     }
 
     if (baseView === 'table' && second === 'columns') {
       state.tableEditMenuKind = 'columns'
-      state.view = third === 'add' ? 'add-column' : 'menu-edit-columns'
+      if (!third) {
+        state.view = 'menu-edit-columns'
+      } else if (third === 'add' && !fourth) {
+        state.view = 'add-column'
+      } else {
+        state.view = 'error-404'
+      }
       return state
     }
 
     if (isMenuId(second)) {
       state.menuCustomKind = menuCustomKindFromMenuId(second)
-      state.view = third === 'add' ? 'add-menu-option' : menuViewFromMenuId(second)
+      if (!third) {
+        state.view = menuViewFromMenuId(second)
+      } else if (third === 'add' && !fourth) {
+        state.view = 'add-menu-option'
+      } else {
+        state.view = 'error-404'
+      }
       return state
     }
 
-    state.view = baseView
+    state.view = 'error-404'
     return state
   }
 
   if (isMenuId(first)) {
     state.menuReturnView = 'home'
     state.menuCustomKind = menuCustomKindFromMenuId(first)
-    state.view = second === 'add' ? 'add-menu-option' : menuViewFromMenuId(first)
+    if (!second) {
+      state.view = menuViewFromMenuId(first)
+    } else if (second === 'add' && !third) {
+      state.view = 'add-menu-option'
+    } else {
+      state.view = 'error-404'
+    }
     return state
   }
 
+  state.view = 'error-404'
   return state
 }
 
@@ -90,24 +126,32 @@ export function buildNavigationPath(state: NavigationUrlState) {
     return '/table'
   }
 
+  if (state.view === 'error-404') {
+    return '/404'
+  }
+
+  if (state.view === 'error-403') {
+    return '/403'
+  }
+
   if (state.view === 'settings') {
     return '/settings'
   }
 
   if (state.view === 'menu-frequency') {
-    return `/${state.menuReturnView}/${MENU_ID_FREQUENCY}`
+    return `${menuBasePathFromReturnView(state.menuReturnView)}/${MENU_ID_FREQUENCY}`
   }
 
   if (state.view === 'menu-time') {
-    return `/${state.menuReturnView}/${MENU_ID_SAVINGS}`
+    return `${menuBasePathFromReturnView(state.menuReturnView)}/${MENU_ID_SAVINGS}`
   }
 
   if (state.view === 'menu-lifetime') {
-    return `/${state.menuReturnView}/${MENU_ID_PERIOD}`
+    return `${menuBasePathFromReturnView(state.menuReturnView)}/${MENU_ID_PERIOD}`
   }
 
   if (state.view === 'add-menu-option') {
-    return `/${state.menuReturnView}/${menuIdFromMenuCustomKind(state.menuCustomKind)}/add`
+    return `${menuBasePathFromReturnView(state.menuReturnView)}/${menuIdFromMenuCustomKind(state.menuCustomKind)}/add`
   }
 
   if (state.view === 'menu-edit-rows') {
@@ -208,4 +252,8 @@ function menuViewFromMenuId(menuId: 'frequency' | 'savings' | 'period'): View {
   }
 
   return 'menu-lifetime'
+}
+
+function menuBasePathFromReturnView(view: BaseView) {
+  return view === 'table' ? '/table' : ''
 }

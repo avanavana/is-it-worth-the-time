@@ -24,15 +24,17 @@ Canonical routes used by the app:
 - `/` home/focus view
 - `/table` table view
 - `/settings` settings
-- `/home/frequency` frequency select menu
-- `/home/savings` time-saved select menu
-- `/home/period` period select menu
+- `/404` not found fallback
+- `/403` forbidden fallback
+- `/frequency` frequency select menu
+- `/savings` time-saved select menu
+- `/period` period select menu
 - `/table/period` period select menu from table view
 - `/table/rows` edit table rows
 - `/table/columns` edit table columns
 - `/table/rows/add` add row
 - `/table/columns/add` add column
-- `/home/:menuId/add` add menu option from home menus
+- `/:menuId/add` add menu option from home menus
 - `/table/:menuId/add` add menu option from table menus
 
 Notes:
