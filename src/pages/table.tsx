@@ -217,7 +217,7 @@ export function TableScreen({
                 onClick={() => onSetTableCursorIndex(tableSliderIndicatorCursorIndex)}
                 onPointerDown={onLifetimeIndicatorPointerDown}
                 className={cn(
-                  'group absolute top-0 inline-flex items-center gap-1 pr-[12px] text-[10px] font-bold text-foreground focus-visible:outline-none',
+                  'group absolute top-0 inline-flex cursor-pointer items-center gap-1 pr-[12px] text-[10px] font-bold text-foreground focus-visible:outline-none',
                   tableSliderIndicatorPositionClass,
                 )}
                 style={{ left: `${tableLifetimeSliderPercent}%` }}
